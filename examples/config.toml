@@ -1,0 +1,43 @@
+[server]
+listen = "127.0.0.1:7380"
+# Set this to the external HTTPS origin before serving through a reverse proxy.
+origin = "https://localhost"
+# The service installer replaces this placeholder. Replace it when installing manually.
+admin_token = "RUNLEVER_GENERATED_ADMIN_TOKEN"
+
+[logs]
+retention_days = 30
+
+[enums.projects]
+forgejo = { label = "Forgejo", value = "/opt/forgejo" }
+immich = { label = "Immich", value = "/opt/immich" }
+
+[enums.compose_ops]
+up = { label = "启动", value = "up" }
+pull-recreate = { label = "拉取并强制重建", value = "pull-recreate" }
+stop = { label = "停止", value = "stop" }
+restart = { label = "重启", value = "restart" }
+
+[actions.compose]
+label = "管理 Compose 项目"
+inputs = { project = { enum = "projects", label = "项目" }, operation = { enum = "compose_ops", label = "操作" } }
+lock = { param = "project" }
+exec = { program = "/usr/local/lib/runlever/compose.sh", args = [{ param = "project" }, { param = "operation" }] }
+
+[actions.compose-restart]
+label = "重启 Compose 项目"
+call = "compose"
+bind = { operation = "restart" }
+
+[actions.restart-forgejo]
+label = "重启 Forgejo"
+call = "compose-restart"
+bind = { project = "forgejo" }
+# The service installer replaces this placeholder. Use a separate secret when installing manually.
+webhook = { token = "RUNLEVER_GENERATED_FORGEJO_TOKEN" }
+
+[actions.compose-update]
+label = "拉取并重建"
+inputs = { project = { enum = "projects", label = "项目" } }
+lock = { param = "project" }
+exec = { cwd = { param = "project" }, command = "docker compose pull && docker compose up -d --force-recreate" }
