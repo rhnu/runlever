@@ -1,0 +1,17 @@
+[Unit]
+Description=Runlever action runner
+
+[Service]
+Type=exec
+User=runlever
+Group=runlever
+StateDirectory=runlever
+StateDirectoryMode=0750
+WorkingDirectory=/var/lib/runlever
+ExecStart=/usr/local/bin/runlever serve --config /etc/runlever/config.toml
+Restart=on-failure
+RestartSec=3s
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

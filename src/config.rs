@@ -23,6 +23,7 @@ pub struct Catalog {
     origin: String,
     admin_token: String,
     retention_days: u32,
+    log_request_params: bool,
     enums: Enums,
     actions: IndexMap<String, Action>,
 }
@@ -189,6 +190,10 @@ impl Catalog {
 
     pub fn retention_days(&self) -> u32 {
         self.retention_days
+    }
+
+    pub fn log_request_params(&self) -> bool {
+        self.log_request_params
     }
 
     /// Return only the Action and option labels, IDs, and permitted selections.

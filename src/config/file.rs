@@ -33,6 +33,7 @@ struct Server {
 #[serde(deny_unknown_fields)]
 struct Logs {
     retention_days: Option<u32>,
+    request_parameters: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -151,6 +152,7 @@ impl Catalog {
             origin,
             admin_token: config.server.admin_token,
             retention_days,
+            log_request_params: config.logs.request_parameters.unwrap_or(true),
             enums: config.enums,
             actions,
         })
