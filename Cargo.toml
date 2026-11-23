@@ -3,6 +3,7 @@ name = "runlever"
 version = "0.1.0"
 edition = "2024"
 description = "Run preconfigured actions on a Linux host from a web console or webhook"
+license = "GPL-3.0-only"
 
 [dependencies]
 anyhow = "1"

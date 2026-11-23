@@ -1,0 +1,81 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ['**']
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  check:
+    if: github.event_name == 'pull_request' || (github.ref_type == 'branch' && !github.event.deleted)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+      - name: Build web console
+        run: |
+          npm --prefix web ci
+          npm --prefix web run build
+      - name: Set up Rust
+        run: rustup toolchain install stable --profile minimal --no-self-update
+      - name: Build and run unit tests
+        run: |
+          cargo +stable build --locked
+          cargo +stable test --locked --lib
+
+  release:
+    if: github.event_name == 'push' && github.ref_type == 'tag' && !github.event.deleted
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    concurrency:
+      group: release-${{ github.ref }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+      - name: Build web console
+        run: |
+          npm --prefix web ci
+          npm --prefix web run build
+      - name: Set up Linux cross-compilation
+        run: |
+          rustup toolchain install stable --profile minimal --no-self-update \
+            --target x86_64-unknown-linux-musl,aarch64-unknown-linux-musl
+          python3 -m venv "$RUNNER_TEMP/zigbuild"
+          "$RUNNER_TEMP/zigbuild/bin/pip" install 'cargo-zigbuild==0.24.*' 'ziglang==0.17.*'
+          echo "$RUNNER_TEMP/zigbuild/bin" >> "$GITHUB_PATH"
+      - name: Build and package Linux binaries
+        run: |
+          version=$(cargo +stable metadata --locked --no-deps --format-version 1 \
+            | jq -er '.packages[] | select(.name == "runlever") | .version')
+          for arch in x86_64 aarch64; do
+            target="$arch-unknown-linux-musl"
+            package="runlever-$version-linux-$arch"
+            cargo +stable zigbuild --locked --release --target "$target"
+            install -Dm755 "target/$target/release/runlever" "dist/$package/runlever"
+            install -m644 LICENSE "dist/$package/LICENSE"
+            tar -czf "dist/$package.tar.gz" -C dist "$package"
+          done
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create --verify-tag --generate-notes \
+            --notes 'Runlever 使用 GPL-3.0-only 许可。可从本页的 Source code 下载此版本的源码。' \
+            -- "$GITHUB_REF_NAME" dist/*.tar.gz

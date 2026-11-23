@@ -4,7 +4,7 @@ Runlever 在一台 Linux 主机上运行管理员预先定义的 Action。通过
 
 ## 安装
 
-选择与 `uname -m` 相符的发行包。以 x86_64、部署地址 `https://ops.example.com` 为例，在 VPS 上运行以下命令。ARM64 使用文件名中的 `aarch64`。
+从 GitHub Releases 下载与 `uname -m` 相符的发行包。以 x86_64、部署地址 `https://ops.example.com` 为例，在 VPS 上运行以下命令。ARM64 使用文件名中的 `aarch64`。
 
 ```sh
 tar -xzf runlever-0.1.0-linux-x86_64.tar.gz
@@ -82,6 +82,12 @@ npm --prefix web run build
 cargo build --release --locked
 ```
 
+推送 Git 标签后，GitHub Actions 会构建 Linux x86_64 和 ARM64 发行包并发布到对应的 GitHub Release。发行包文件名中的版本取自 `Cargo.toml`。
+
 本地前台运行使用 `runlever serve --config <配置文件> --state-dir <数据目录>`。`check` 可以验证示例结构。实际启动前需要替换示例 Token 并配置外部 HTTPS 地址。
 
 配置、绑定与调用解析在 [config](src/config.rs)，请求处理在 [http](src/http.rs)，运行与日志保存在 [engine](src/engine.rs)，界面入口在 [React 应用](web/src/App.tsx)。
+
+## 许可证
+
+Runlever 采用 [GNU GPL 第 3 版](LICENSE)（`GPL-3.0-only`）。发行包附带许可证全文。
