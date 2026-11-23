@@ -15,16 +15,12 @@ const SECONDS_PER_DAY: i64 = 24 * 60 * 60;
 const RUN_PAGE_SIZE: i64 = 50;
 const EVENT_PAGE_SIZE: i64 = 256;
 
-const RUN_COLUMNS: &str = "id, action, label, target, selections, source, status, started_at,
+const RUN_COLUMNS: &str =
+    "id, action, label, target, selections, source, status, submitted_at, started_at,
     finished_at, exit_code, error, log_state = 'expired'";
 
 pub(super) struct Store {
     connection: Mutex<Connection>,
-}
-
-pub(super) enum Claim {
-    Busy(i64),
-    Created(i64, Invocation),
 }
 
 impl Store {
@@ -35,51 +31,18 @@ impl Store {
         let mut connection = Connection::open(&path)
             .with_context(|| format!("open SQLite history {}", path.display()))?;
         connection.busy_timeout(Duration::from_secs(5))?;
-        connection
-            .execute_batch(
-                "PRAGMA foreign_keys = ON;
-                 PRAGMA journal_mode = WAL;
-
-                 BEGIN;
-                 CREATE TABLE IF NOT EXISTS runs (
-                     id INTEGER PRIMARY KEY,
-                     action TEXT NOT NULL,
-                     label TEXT NOT NULL,
-                     target TEXT NOT NULL,
-                     selections TEXT NOT NULL,
-                     source TEXT NOT NULL,
-                     lock_key TEXT,
-                     status TEXT NOT NULL CHECK (status IN (
-                         'running', 'succeeded', 'failed', 'interrupted'
-                     )),
-                     started_at INTEGER NOT NULL,
-                     finished_at INTEGER,
-                     exit_code INTEGER,
-                     error TEXT,
-                     log_state TEXT NOT NULL DEFAULT 'empty'
-                         CHECK (log_state IN ('empty', 'present', 'expired'))
-                 );
-                 CREATE UNIQUE INDEX IF NOT EXISTS active_lock
-                     ON runs (lock_key) WHERE status = 'running' AND lock_key IS NOT NULL;
-                 CREATE INDEX IF NOT EXISTS pending_log_expiry
-                     ON runs (finished_at) WHERE log_state = 'present' AND finished_at IS NOT NULL;
-                 CREATE TABLE IF NOT EXISTS log_events (
-                     run_id INTEGER NOT NULL REFERENCES runs (id),
-                     seq INTEGER NOT NULL,
-                     stream TEXT NOT NULL CHECK (stream IN ('stdout', 'stderr')),
-                     text TEXT NOT NULL,
-                     at INTEGER NOT NULL,
-                     PRIMARY KEY (run_id, seq)
-                 ) WITHOUT ROWID;
-                 COMMIT;",
-            )
-            .context("initialize the run history tables")?;
+        connection.pragma_update(None, "journal_mode", "WAL")?;
+        initialize(&mut connection).context("initialize or migrate run history")?;
+        connection.pragma_update(None, "foreign_keys", true)?;
         let interrupted = connection
             .execute(
                 "UPDATE runs
                  SET status = 'interrupted', finished_at = ?1,
-                     error = 'the service stopped before the run finished'
-                 WHERE status = 'running'",
+                     error = CASE status
+                         WHEN 'queued' THEN '服务停止时仍在排队，命令未启动'
+                         ELSE 'the service stopped before the run finished'
+                     END
+                 WHERE status IN ('queued', 'running')",
                 [now()],
             )
             .context("mark runs left active by the previous service instance as interrupted")?;
@@ -93,47 +56,67 @@ impl Store {
         })
     }
 
-    pub(super) async fn claim(
+    pub(super) async fn create(
         self: &Arc<Self>,
         invocation: Invocation,
         source: String,
-    ) -> Result<Claim> {
+        start_now: bool,
+    ) -> Result<(i64, Invocation)> {
         self.access(move |connection| {
-            let transaction =
-                connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-            if let Some(lock_key) = &invocation.lock {
-                let existing = transaction
-                    .query_row(
-                        "SELECT id FROM runs WHERE lock_key = ?1 AND status = 'running'",
-                        [lock_key],
-                        |row| row.get(0),
-                    )
-                    .optional()?;
-                if let Some(id) = existing {
-                    return Ok(Claim::Busy(id));
-                }
-            }
             let selections = serde_json::to_string(&invocation.selections)
                 .context("serialize run selections")?;
-            transaction.execute(
+            let submitted_at = now();
+            let (status, started_at) = if start_now {
+                ("running", Some(submitted_at))
+            } else {
+                ("queued", None)
+            };
+            connection.execute(
                 "INSERT INTO runs (
-                     action, label, target, selections, source, lock_key, status, started_at
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'running', ?7)",
+                     action, label, target, selections, source, status, submitted_at, started_at
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                 params![
                     invocation.action,
                     invocation.label,
                     invocation.target,
                     selections,
                     source,
-                    invocation.lock,
-                    now(),
+                    status,
+                    submitted_at,
+                    started_at,
                 ],
             )?;
-            let id = transaction.last_insert_rowid();
-            transaction.commit()?;
-            Ok(Claim::Created(id, invocation))
+            Ok((connection.last_insert_rowid(), invocation))
         })
         .await
+    }
+
+    pub(super) async fn promote(self: &Arc<Self>, id: i64) -> Result<()> {
+        self.access(move |connection| {
+            let rows = connection.execute(
+                "UPDATE runs SET status = 'running', started_at = ?2
+                 WHERE id = ?1 AND status = 'queued'",
+                params![id, now()],
+            )?;
+            ensure!(rows == 1, "run {id} is no longer queued");
+            Ok(())
+        })
+        .await
+        .with_context(|| format!("start queued run {id}"))
+    }
+
+    pub(super) async fn expire(self: &Arc<Self>, id: i64) -> Result<()> {
+        self.access(move |connection| {
+            let rows = connection.execute(
+                "UPDATE runs SET status = 'queue_timeout', finished_at = ?2, error = ?3
+                 WHERE id = ?1 AND status = 'queued'",
+                params![id, now(), "等待执行超时，命令未启动"],
+            )?;
+            ensure!(rows == 1, "run {id} is no longer queued");
+            Ok(())
+        })
+        .await
+        .with_context(|| format!("expire queued run {id}"))
     }
 
     pub(super) async fn get(self: &Arc<Self>, id: i64) -> Result<Option<Run>> {
@@ -269,6 +252,74 @@ impl Store {
     }
 }
 
+fn initialize(connection: &mut Connection) -> Result<()> {
+    let version: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    if version == 1 {
+        return Ok(());
+    }
+    ensure!(
+        version == 0,
+        "unsupported run history schema version {version}"
+    );
+
+    // The history table must be replaced to change its status constraint. Keep
+    // the log table in place with its existing references to run IDs.
+    connection.pragma_update(None, "foreign_keys", false)?;
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let existing: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'runs')",
+        [],
+        |row| row.get(0),
+    )?;
+    transaction.execute_batch(
+        "CREATE TABLE runs_new (
+             id INTEGER PRIMARY KEY,
+             action TEXT NOT NULL,
+             label TEXT NOT NULL,
+             target TEXT NOT NULL,
+             selections TEXT NOT NULL,
+             source TEXT NOT NULL,
+             status TEXT NOT NULL CHECK (status IN (
+                 'queued', 'running', 'succeeded', 'failed', 'interrupted', 'queue_timeout'
+             )),
+             submitted_at INTEGER NOT NULL,
+             started_at INTEGER,
+             finished_at INTEGER,
+             exit_code INTEGER,
+             error TEXT,
+             log_state TEXT NOT NULL DEFAULT 'empty'
+                 CHECK (log_state IN ('empty', 'present', 'expired'))
+         );",
+    )?;
+    if existing {
+        transaction.execute_batch(
+            "INSERT INTO runs_new (
+                 id, action, label, target, selections, source, status, submitted_at,
+                 started_at, finished_at, exit_code, error, log_state
+             )
+             SELECT id, action, label, target, selections, source, status, started_at,
+                    started_at, finished_at, exit_code, error, log_state FROM runs;
+             DROP TABLE runs;",
+        )?;
+    }
+    transaction.execute_batch(
+        "ALTER TABLE runs_new RENAME TO runs;
+         CREATE INDEX pending_log_expiry
+             ON runs (finished_at) WHERE log_state = 'present' AND finished_at IS NOT NULL;
+         CREATE TABLE IF NOT EXISTS log_events (
+             run_id INTEGER NOT NULL REFERENCES runs (id),
+             seq INTEGER NOT NULL,
+             stream TEXT NOT NULL CHECK (stream IN ('stdout', 'stderr')),
+             text TEXT NOT NULL,
+             at INTEGER NOT NULL,
+             PRIMARY KEY (run_id, seq)
+         ) WITHOUT ROWID;
+         PRAGMA user_version = 1;",
+    )?;
+    transaction.commit()?;
+    Ok(())
+}
+
 fn read_run(row: &Row<'_>) -> rusqlite::Result<Run> {
     let selections: String = row.get(4)?;
     let selections = serde_json::from_str(&selections).map_err(|error| {
@@ -282,11 +333,12 @@ fn read_run(row: &Row<'_>) -> rusqlite::Result<Run> {
         selections,
         source: row.get(5)?,
         status: row.get(6)?,
-        started_at: row.get(7)?,
-        finished_at: row.get(8)?,
-        exit_code: row.get(9)?,
-        error: row.get(10)?,
-        logs_expired: row.get(11)?,
+        submitted_at: row.get(7)?,
+        started_at: row.get(8)?,
+        finished_at: row.get(9)?,
+        exit_code: row.get(10)?,
+        error: row.get(11)?,
+        logs_expired: row.get(12)?,
     })
 }
 

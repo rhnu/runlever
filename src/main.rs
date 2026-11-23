@@ -86,7 +86,12 @@ async fn main() -> Result<()> {
             let listener = tokio::net::TcpListener::bind(catalog.listen())
                 .await
                 .context("bind HTTP listener")?;
-            let engine = Engine::open(&state_dir, catalog.retention_days(), catalog.secrets())?;
+            let engine = Engine::open(
+                &state_dir,
+                catalog.retention_days(),
+                catalog.secrets(),
+                catalog.queue(),
+            )?;
             info!(address = %listener.local_addr()?, "serving Runlever");
             axum::serve(listener, http::router(catalog, engine))
                 .await

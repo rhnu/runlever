@@ -3,7 +3,8 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use super::{
-    Action, Argument, Catalog, Enums, Execution, Input, Inputs, Parameter, normalize_origin,
+    Action, Argument, Catalog, Enums, Execution, Group, Input, Inputs, Parameter, QueueConfig,
+    normalize_origin,
 };
 use anyhow::{Context, Result, anyhow, bail, ensure};
 use indexmap::IndexMap;
@@ -16,7 +17,11 @@ struct ConfigFile {
     #[serde(default)]
     logs: Logs,
     #[serde(default)]
+    queue: QueueConfig,
+    #[serde(default)]
     enums: Enums,
+    #[serde(default)]
+    groups: IndexMap<String, Group>,
     #[serde(default)]
     actions: IndexMap<String, ActionFile>,
 }
@@ -40,6 +45,7 @@ struct Logs {
 #[serde(deny_unknown_fields)]
 struct ActionFile {
     label: String,
+    group: Option<String>,
     inputs: Option<IndexMap<String, InputFile>>,
     lock: Option<Parameter>,
     exec: Option<Exec>,
@@ -81,6 +87,7 @@ struct Webhook {
 
 struct Definition {
     label: String,
+    group: Option<String>,
     webhook_token: Option<String>,
     body: Body,
 }
@@ -133,12 +140,29 @@ impl Catalog {
         );
         let retention_days = config.logs.retention_days.unwrap_or(30);
         ensure!(retention_days > 0, "logs.retention_days must be positive");
+        ensure!(
+            config.queue.max_wait_seconds > 0,
+            "queue.max_wait_seconds must be positive"
+        );
 
         validate_enums(&config.enums)?;
+        for (id, group) in &config.groups {
+            ensure!(valid_id(id), "invalid group ID {id:?}");
+            ensure!(
+                !group.label.trim().is_empty(),
+                "group {id:?} must have a nonempty label"
+            );
+        }
         let definitions = config
             .actions
             .into_iter()
             .map(|(id, action)| {
+                if let Some(group) = &action.group {
+                    ensure!(
+                        config.groups.contains_key(group),
+                        "action {id:?} refers to unknown group {group:?}"
+                    );
+                }
                 let definition = Definition::new(&id, action, &config.enums)
                     .with_context(|| format!("action {id:?}"))?;
                 Ok((id, definition))
@@ -153,7 +177,9 @@ impl Catalog {
             admin_token: config.server.admin_token,
             retention_days,
             log_request_params: config.logs.request_parameters.unwrap_or(true),
+            queue: config.queue,
             enums: config.enums,
+            groups: config.groups,
             actions,
         })
     }
@@ -242,6 +268,7 @@ impl Definition {
         };
         Ok(Self {
             label: action.label,
+            group: action.group,
             webhook_token: action.webhook.map(|webhook| webhook.token),
             body,
         })
@@ -364,19 +391,30 @@ fn compile_actions(
             }
         }
         for (id, definition) in path.into_iter().rev() {
-            let (execution, bindings) = match &definition.body {
-                Body::Exec(execution) => (Arc::clone(execution), BTreeMap::new()),
+            let (execution, bindings, inherited_group) = match &definition.body {
+                Body::Exec(execution) => (Arc::clone(execution), BTreeMap::new(), None),
                 Body::Call { target, bind } => {
                     let target = &compiled[target.as_str()];
                     let bindings = extend_bindings(target, bind, enums)
                         .with_context(|| format!("action {id:?}"))?;
-                    (Arc::clone(&target.execution), bindings)
+                    (
+                        Arc::clone(&target.execution),
+                        bindings,
+                        target.group.as_ref(),
+                    )
                 }
             };
+            if let (Some(group), Some(inherited)) = (&definition.group, inherited_group) {
+                ensure!(
+                    group == inherited,
+                    "action {id:?} cannot override inherited group {inherited:?} with {group:?}"
+                );
+            }
             compiled.insert(
                 id,
                 Action {
                     label: definition.label.clone(),
+                    group: inherited_group.or(definition.group.as_ref()).cloned(),
                     webhook_token: definition.webhook_token.clone(),
                     execution,
                     bindings,

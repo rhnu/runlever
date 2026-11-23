@@ -203,11 +203,10 @@ async fn start(app: App, id: String, body: &[u8], source: &str) -> Reply {
     }
     match app.engine.start(invocation, source).await {
         Ok(id) => Ok((StatusCode::ACCEPTED, Json(json!({"run_id": id}))).into_response()),
-        Err(StartError::Busy(id)) => Ok((
-            StatusCode::CONFLICT,
-            Json(json!({"error":"该目标正在执行其他动作","run_id":id})),
-        )
-            .into_response()),
+        Err(StartError::QueueFull) => Err(ApiError(
+            StatusCode::TOO_MANY_REQUESTS,
+            "等待队列已满，请稍后再试。".into(),
+        )),
         Err(StartError::Other(cause)) => Err(internal(cause)),
     }
 }
@@ -252,6 +251,7 @@ async fn events(
         .unwrap_or(0);
     let mut after = cursor.after.max(last_id).max(0);
     let stream = async_stream::stream! {
+        let mut active_status = None;
         loop {
             if !app.sessions.active(&key) {
                 yield Ok::<_, axum::Error>(Event::default().event("auth").data("expired"));
@@ -263,6 +263,10 @@ async fn events(
                 Ok(None) => break,
                 Err(cause) => { error!(run_id=id, error=?cause, "read stream status"); break; }
             };
+            if state.is_active() && active_status.as_ref() != Some(&state.status) {
+                active_status = Some(state.status.clone());
+                yield Event::default().event("status").json_data(&state);
+            }
             let batch = match app.engine.events(id, after).await {
                 Ok(batch) => batch,
                 Err(cause) => { error!(run_id=id, error=?cause, "read stream events"); break; }
@@ -274,7 +278,7 @@ async fn events(
                 }
                 continue;
             }
-            if state.status != "running" {
+            if !state.is_active() {
                 // Retention cleanup may have removed the last batch after the status read.
                 let latest = match app.engine.get(id).await {
                     Ok(Some(run)) => run,

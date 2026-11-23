@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { api, ApiError, isUnauthorized } from "./api";
 import type { Action, ActionInput } from "./model";
-import { actionHref, historyHref, Link } from "./route";
+import { actionHref, Link } from "./route";
 import { Feedback, RunPanel } from "./RunPanel";
 
 interface ActionsPageProps {
@@ -35,25 +35,46 @@ export function ActionsPage({
     return <Feedback>还没有配置动作。</Feedback>;
   }
 
+  const groups = new Map<string | undefined, { label: string; items: Action[] }>();
+  for (const item of actions) {
+    const id = item.group?.id;
+    const group = groups.get(id);
+    if (group) group.items.push(item);
+    else groups.set(id, { label: item.group?.label ?? "未分组", items: [item] });
+  }
+
   return (
     <div className="split split-actions" data-open={showDetail}>
       <nav className="record-list" aria-label="动作列表">
-        <ul>
-          {actions.map((item) => (
-            <li key={item.id}>
-              <Link
-                className="record-row"
-                href={actionHref(
-                  item.id,
-                  (item.id === actionId ? run : undefined) ?? currentRuns.get(item.id),
-                )}
-                aria-current={action?.id === item.id ? "page" : undefined}
-              >
-                <span className="record-title">{item.label}</span>
-              </Link>
-            </li>
-          ))}
-        </ul>
+        {[...groups].map(([id, group]) => {
+          const heading = id !== undefined || groups.size > 1;
+          const headingId = id === undefined ? "actions-ungrouped" : `actions-group-${id}`;
+          return (
+            <section key={headingId} aria-labelledby={heading ? headingId : undefined}>
+              {heading && (
+                <h2 className="action-group-title" id={headingId}>
+                  {group.label}
+                </h2>
+              )}
+              <ul>
+                {group.items.map((item) => (
+                  <li key={item.id}>
+                    <Link
+                      className="record-row"
+                      href={actionHref(
+                        item.id,
+                        (item.id === actionId ? run : undefined) ?? currentRuns.get(item.id),
+                      )}
+                      aria-current={action?.id === item.id ? "page" : undefined}
+                    >
+                      <span className="record-title">{item.label}</span>
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          );
+        })}
       </nav>
       <div className="detail">
         <Link className="mobile-back text-link" href={actionHref()} ref={mobileBack}>
@@ -94,7 +115,7 @@ interface ActionFormProps {
 function ActionForm({ action, onRunStarted, onUnauthorized }: ActionFormProps) {
   const [selections, setSelections] = useState<ReadonlyMap<string, string>>(() => new Map());
   const [busy, setBusy] = useState(false);
-  const [problem, setProblem] = useState<{ message: string; run?: number }>();
+  const [problem, setProblem] = useState<string>();
   const inputsReady = action.inputs.every((input) => input.options.length > 0);
   const choiceLabels = action.inputs.map(
     (input) => input.options.find((option) => option.id === selections.get(input.id))?.label,
@@ -121,14 +142,12 @@ function ActionForm({ action, onRunStarted, onUnauthorized }: ActionFormProps) {
       onRunStarted(action.id, run_id);
     } catch (error) {
       if (isUnauthorized(error)) onUnauthorized();
-      else if (error instanceof ApiError && error.status === 409) {
-        setProblem({ message: "该目标正在执行其他动作。", run: error.detail.run_id });
+      else if (error instanceof ApiError && error.status === 429) {
+        setProblem(error.detail.error ?? "等待队列已满，请稍后再试。");
       } else if (error instanceof ApiError && [400, 403, 404, 422].includes(error.status)) {
-        setProblem({
-          message: error.detail.error ?? "服务器拒绝了请求，请检查所选参数和动作配置。",
-        });
+        setProblem(error.detail.error ?? "服务器拒绝了请求，请检查所选参数和动作配置。");
       } else {
-        setProblem({ message: "未能确认执行请求，请查看执行记录。" });
+        setProblem("未能确认执行请求，请查看执行记录。");
       }
     } finally {
       setBusy(false);
@@ -172,12 +191,7 @@ function ActionForm({ action, onRunStarted, onUnauthorized }: ActionFormProps) {
       </form>
       {problem && (
         <div className="action-problem" role="alert">
-          <span>{problem.message}</span>
-          {problem.run !== undefined && (
-            <Link className="text-link" href={historyHref(problem.run)}>
-              查看正在执行的动作
-            </Link>
-          )}
+          {problem}
         </div>
       )}
     </section>

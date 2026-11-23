@@ -275,6 +275,12 @@ a {
   padding: 0;
   margin: 0;
 }
+.action-group-title {
+  margin: 10px clamp(10px, 1.55vw, 23px) 6px;
+  color: var(--muted);
+  font-size: 1rem;
+  overflow-wrap: anywhere;
+}
 .record-list li {
   position: relative;
   padding: 5px 0;
@@ -501,7 +507,9 @@ a {
   color: #911d18;
   background: #fbded7;
 }
-.badge-interrupted {
+.badge-queued,
+.badge-interrupted,
+.badge-queue_timeout {
   color: #714700;
   background: #f5e6c4;
 }

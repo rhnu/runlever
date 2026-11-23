@@ -6,6 +6,7 @@ mod tests;
 
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
+use std::num::NonZeroUsize;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -24,15 +25,41 @@ pub struct Catalog {
     admin_token: String,
     retention_days: u32,
     log_request_params: bool,
+    queue: QueueConfig,
     enums: Enums,
+    groups: IndexMap<String, Group>,
     actions: IndexMap<String, Action>,
 }
 
 struct Action {
     label: String,
+    group: Option<String>,
     webhook_token: Option<String>,
     execution: Arc<Execution>,
     bindings: BTreeMap<String, String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Group {
+    label: String,
+    max_concurrent: Option<NonZeroUsize>,
+}
+
+#[derive(Clone, Copy, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct QueueConfig {
+    pub max_wait_seconds: u32,
+    pub max_pending: usize,
+}
+
+impl Default for QueueConfig {
+    fn default() -> Self {
+        Self {
+            max_wait_seconds: 60,
+            max_pending: 16,
+        }
+    }
 }
 
 impl Action {
@@ -82,7 +109,15 @@ struct Parameter {
 pub struct ActionView {
     pub id: String,
     pub label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub group: Option<GroupView>,
     pub inputs: Vec<InputView>,
+}
+
+#[derive(Serialize)]
+pub struct GroupView {
+    pub id: String,
+    pub label: String,
 }
 
 #[derive(Serialize)]
@@ -108,6 +143,13 @@ pub struct Invocation {
     pub args: Vec<String>,
     pub cwd: Option<String>,
     pub lock: Option<String>,
+    pub group_limit: Option<GroupLimit>,
+}
+
+#[derive(Debug)]
+pub struct GroupLimit {
+    pub id: String,
+    pub max_concurrent: NonZeroUsize,
 }
 
 #[derive(Debug, Error)]
@@ -196,6 +238,10 @@ impl Catalog {
         self.log_request_params
     }
 
+    pub fn queue(&self) -> QueueConfig {
+        self.queue
+    }
+
     /// Return only the Action and option labels, IDs, and permitted selections.
     pub fn actions(&self) -> Vec<ActionView> {
         self.actions
@@ -203,6 +249,10 @@ impl Catalog {
             .map(|(id, action)| ActionView {
                 id: id.clone(),
                 label: action.label.clone(),
+                group: action.group.as_ref().map(|id| GroupView {
+                    id: id.clone(),
+                    label: self.groups[id].label.clone(),
+                }),
                 inputs: action
                     .visible_inputs()
                     .map(|(name, input)| InputView {
@@ -271,6 +321,14 @@ impl Catalog {
             lock: execution.lock.as_ref().map(|name| {
                 let enum_id = &execution.inputs[name].enum_id;
                 format!("{enum_id}:{}", selections[name])
+            }),
+            group_limit: action.group.as_ref().and_then(|id| {
+                self.groups[id]
+                    .max_concurrent
+                    .map(|max_concurrent| GroupLimit {
+                        id: id.clone(),
+                        max_concurrent,
+                    })
             }),
             selections,
         })

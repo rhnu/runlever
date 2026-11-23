@@ -170,8 +170,8 @@ function HistoryResults({ actions, filters, run, onUnauthorized }: HistoryPagePr
                       <span className="record-title">{item.label}</span>
                       {description && <span className="record-choices">{description}</span>}
                       <div className="record-meta">
-                        <RunTime timestamp={item.started_at} />
-                        {item.finished_at !== null && (
+                        <RunTime timestamp={item.submitted_at} />
+                        {item.started_at !== null && item.finished_at !== null && (
                           <span>{formatDuration(item.started_at, item.finished_at)}</span>
                         )}
                       </div>

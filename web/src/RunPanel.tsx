@@ -57,7 +57,7 @@ export function RunPanel({ id, mode, actions, onUnauthorized, onRun }: RunPanelP
   const page = follow ? lastPage : Math.min(lastPage, selectedPage);
   const lines = buffer.lines.slice(page * linesPerPage, (page + 1) * linesPerPage);
   const newLines = follow ? 0 : buffer.lines.length - seenLines;
-  const hasLogs = Boolean(run && !run.logs_expired);
+  const hasLogs = Boolean(run && run.started_at !== null && !run.logs_expired);
 
   useLayoutEffect(() => {
     if (follow && viewport.current) viewport.current.scrollTop = viewport.current.scrollHeight;
@@ -102,17 +102,21 @@ export function RunPanel({ id, mode, actions, onUnauthorized, onRun }: RunPanelP
   const showResult = connection === "done";
   const outputStatus = run.logs_expired
     ? "日志已过期。"
-    : connection === "loading" || connection === "connecting"
-      ? "正在读取日志…"
-      : connection === "reconnecting"
-        ? "日志连接已断开，正在重连…"
-        : connection === "open" && run.status !== "running"
-          ? "正在读取日志…"
-          : buffer.lines.length === 0 && connection === "done"
-            ? "本次执行没有输出。"
-            : buffer.lines.length === 0 && connection === "open"
-              ? "正在等待输出…"
-              : "";
+    : connection === "reconnecting"
+      ? "日志连接已断开，正在重连…"
+      : run.status === "queued"
+        ? "正在等待执行…"
+        : run.started_at === null
+          ? "命令未启动。"
+          : connection === "loading" || connection === "connecting"
+            ? "正在读取日志…"
+            : connection === "open" && run.status !== "running"
+              ? "正在读取日志…"
+              : buffer.lines.length === 0 && connection === "done"
+                ? "本次执行没有输出。"
+                : buffer.lines.length === 0 && connection === "open"
+                  ? "正在等待输出…"
+                  : "";
 
   return (
     <section className={`run-panel run-panel-${mode}`} aria-labelledby="run-heading">
@@ -127,7 +131,14 @@ export function RunPanel({ id, mode, actions, onUnauthorized, onRun }: RunPanelP
           <div className="run-meta">
             {run.target && <span>{run.target}</span>}
             <span>{sources[run.source]}</span>
-            <RunTime timestamp={run.started_at} />
+            <span>
+              提交于 <RunTime timestamp={run.submitted_at} />
+            </span>
+            {run.started_at !== null && run.started_at !== run.submitted_at && (
+              <span>
+                开始于 <RunTime timestamp={run.started_at} />
+              </span>
+            )}
           </div>
         </div>
         {mode === "actions" && (
@@ -227,7 +238,7 @@ export function RunPanel({ id, mode, actions, onUnauthorized, onRun }: RunPanelP
       )}
       {showResult && (run.exit_code !== null || run.error || run.finished_at !== null) && (
         <output className="run-result">
-          {run.finished_at !== null && (
+          {run.started_at !== null && run.finished_at !== null && (
             <span>耗时 {formatDuration(run.started_at, run.finished_at)}</span>
           )}
           {run.exit_code !== null && (

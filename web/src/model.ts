@@ -7,14 +7,17 @@ export interface ActionInput {
 export interface Action {
   id: string;
   label: string;
+  group?: { id: string; label: string };
   inputs: ActionInput[];
 }
 
 export const statuses = {
+  queued: "排队中",
   running: "运行中",
   succeeded: "成功",
   failed: "失败",
   interrupted: "已中断",
+  queue_timeout: "排队超时",
 } as const;
 
 export const sources = { web: "网页", webhook: "Webhook" } as const;
@@ -31,7 +34,8 @@ export interface Run {
   selections: Selections;
   source: Source;
   status: Status;
-  started_at: number;
+  submitted_at: number;
+  started_at: number | null;
   finished_at: number | null;
   exit_code: number | null;
   error: string | null;

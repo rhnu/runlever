@@ -18,8 +18,17 @@ pull-recreate = { label = "拉取并强制重建", value = "pull-recreate" }
 stop = { label = "停止", value = "stop" }
 restart = { label = "重启", value = "restart" }
 
+[groups.compose]
+label = "Compose 管理"
+max_concurrent = 2
+
+[queue]
+max_wait_seconds = 60
+max_pending = 16
+
 [actions.compose]
 label = "管理 Compose 项目"
+group = "compose"
 inputs = { project = { enum = "projects", label = "项目" }, operation = { enum = "compose_ops", label = "操作" } }
 lock = { param = "project" }
 exec = { program = "/usr/local/lib/runlever/compose.sh", args = [{ param = "project" }, { param = "operation" }] }
@@ -38,6 +47,7 @@ webhook = { token = "RUNLEVER_GENERATED_FORGEJO_TOKEN" }
 
 [actions.compose-update]
 label = "拉取并重建"
+group = "compose"
 inputs = { project = { enum = "projects", label = "项目" } }
 lock = { param = "project" }
 exec = { cwd = { param = "project" }, command = "docker compose pull && docker compose up -d --force-recreate" }

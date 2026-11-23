@@ -129,6 +129,90 @@ fn resolves_wrapped_argv_and_shares_locks_by_enum_and_option() {
 }
 
 #[test]
+fn groups_apply_to_direct_and_derived_actions() {
+    let source = EXAMPLE
+        .replace(
+            "[actions.run]\nlabel = \"Run\"",
+            "[actions.run]\nlabel = \"Run\"\ngroup = \"compose\"",
+        )
+        .replace(
+            "[actions.command]\nlabel = \"Run shell command\"",
+            "[actions.command]\nlabel = \"Run shell command\"\ngroup = \"shortcuts\"",
+        );
+    let source = format!(
+        "{source}\n[groups.compose]\nlabel = 'Compose'\nmax_concurrent = 2\n
+         [groups.shortcuts]\nlabel = 'Shortcuts'"
+    );
+    let catalog = Catalog::parse(&source).unwrap();
+    let direct = catalog
+        .resolve(
+            "run",
+            &selections(&[("z-project", "zulu"), ("a-operation", "restart")]),
+        )
+        .unwrap();
+    let derived = catalog.resolve("restart-zulu", &BTreeMap::new()).unwrap();
+    for invocation in [&direct, &derived] {
+        let group = invocation.group_limit.as_ref().unwrap();
+        assert_eq!(group.id, "compose");
+        assert_eq!(group.max_concurrent.get(), 2);
+    }
+    assert_eq!(derived.lock, direct.lock);
+    let command = catalog
+        .resolve("command", &selections(&[("project", "zulu")]))
+        .unwrap();
+    assert!(command.group_limit.is_none());
+    let views = catalog.actions();
+    assert_eq!(
+        serde_json::to_value(views[0].group.as_ref()).unwrap(),
+        json!({"id": "compose", "label": "Compose"})
+    );
+    assert_eq!(views[3].group.as_ref().unwrap().id, "shortcuts");
+}
+
+#[test]
+fn validates_groups_and_queue_limits() {
+    let source = "[server]\nadmin_token = 'test-admin'\n";
+    let configured = Catalog::parse(&format!(
+        "{source}[queue]\nmax_pending = 0\nmax_wait_seconds = 5"
+    ))
+    .unwrap();
+    assert_eq!(configured.queue().max_pending, 0);
+    assert_eq!(configured.queue().max_wait_seconds, 5);
+    let defaults = Catalog::parse(source).unwrap().queue();
+    assert_eq!(defaults.max_pending, 16);
+    assert_eq!(defaults.max_wait_seconds, 60);
+    assert_error(
+        &format!("{source}[queue]\nmax_wait_seconds = 0"),
+        "queue.max_wait_seconds must be positive",
+    );
+    assert_error(
+        &format!("{source}[groups.ops]\nlabel = 'Ops'\nmax_concurrent = 0"),
+        "groups.ops.max_concurrent",
+    );
+    let actions = r#"
+[actions.base]
+label = "Base"
+group = "ops"
+exec = {program = "tool"}
+[actions.derived]
+label = "Derived"
+group = "other"
+call = "base"
+"#;
+    let groups = "[groups.ops]\nlabel = 'Ops'\n[groups.other]\nlabel = 'Other'";
+    assert_error(&format!("{source}{actions}"), "unknown group");
+    assert_error(
+        &format!("{source}{actions}{groups}"),
+        "cannot override inherited group",
+    );
+    let derived_only = actions.replace("group = \"ops\"\n", "");
+    let catalog = Catalog::parse(&format!("{source}{derived_only}{groups}")).unwrap();
+    let views = catalog.actions();
+    assert!(views[0].group.is_none());
+    assert_eq!(views[1].group.as_ref().unwrap().id, "other");
+}
+
+#[test]
 fn rejects_missing_unknown_and_fixed_inputs() {
     let catalog = Catalog::parse(EXAMPLE).unwrap();
     let error = catalog.resolve("restart", &BTreeMap::new()).unwrap_err();

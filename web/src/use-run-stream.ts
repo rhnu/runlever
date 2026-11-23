@@ -38,6 +38,16 @@ export function useRunStream(
       onRunRef.current?.(next);
     }
 
+    function recordStatus(event: MessageEvent<string>) {
+      try {
+        record(JSON.parse(event.data) as Run);
+        return true;
+      } catch {
+        fail("无法读取执行状态，请重试。");
+        return false;
+      }
+    }
+
     function unauthenticated() {
       stopFeed();
       onUnauthorized();
@@ -101,6 +111,7 @@ export function useRunStream(
         recover();
       };
       current.addEventListener("auth", unauthenticated);
+      current.addEventListener("status", recordStatus);
       current.addEventListener("log", (event: MessageEvent<string>) => {
         try {
           appendLog(buffer, JSON.parse(event.data) as LogChunk);
@@ -116,12 +127,7 @@ export function useRunStream(
         }
       });
       current.addEventListener("done", (event: MessageEvent<string>) => {
-        try {
-          record(JSON.parse(event.data) as Run);
-        } catch {
-          fail("无法读取执行结果，请重试。");
-          return;
-        }
+        if (!recordStatus(event)) return;
         stopFeed();
         setConnection("done");
       });

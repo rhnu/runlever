@@ -7,8 +7,8 @@ Runlever 在一台 Linux 主机上运行管理员预先定义的 Action。通过
 从 GitHub Releases 下载与 `uname -m` 相符的发行包。以 x86_64、部署地址 `https://ops.example.com` 为例，在 VPS 上运行以下命令。ARM64 使用文件名中的 `aarch64`。
 
 ```sh
-tar -xzf runlever-0.1.0-linux-x86_64.tar.gz
-cd runlever-0.1.0-linux-x86_64
+tar -xzf runlever-0.2.0-linux-x86_64.tar.gz
+cd runlever-0.2.0-linux-x86_64
 sudo ./runlever service install --origin https://ops.example.com
 ```
 
@@ -24,7 +24,7 @@ ops.example.com {
 
 打开站点并用管理员 Token 登录。若代理会缓冲流式响应，请为 `/api/runs/` 关闭响应缓冲，以便日志及时显示。
 
-升级时解压新版本并再次运行 `sudo ./runlever service install`。安装器更新二进制和 [systemd unit](packaging/runlever.service)，保留现有配置、脚本和数据库，随后重启服务。请在没有动作运行时升级，避免中断子进程。
+升级时解压新版本并再次运行 `sudo ./runlever service install`。安装器更新二进制和 [systemd unit](packaging/runlever.service)，保留现有配置、脚本和数据库，随后重启服务。请在执行和排队的动作均已结束后升级。0.2.0 启动时会迁移数据库，保留已有执行记录和日志。
 
 ## 定义动作
 
@@ -35,9 +35,9 @@ ops.example.com {
 - `exec.program` 直接启动程序，`exec.args` 中每个固定字符串或 `{ param = "project" }` 都是一个独立参数。脚本的位置参数从 `$1` 开始。`exec.cwd` 可为固定目录或参数引用。
 - `exec.command` 接受管理员编写的固定 Shell 命令。例如 `exec = { command = 'docker compose --project-directory "$1" restart', args = [{ param = "project" }] }`。执行器调用 `/bin/sh -c`，通过独立的位置参数传值。
 - `call` 引用另一个 Action。`bind` 以选项 ID 固定参数。层层调用后，界面仅显示尚未绑定的输入，所有输入均已绑定时单击按钮即可执行。
-- `lock = { param = "project" }` 按枚举和选项 ID 互斥。引用同一枚举同一选项的动作共享锁，调用派生 Action 也会参与互斥。正在运行的目标接受第二个请求时返回 `409` 和占用者的 `run_id`。
+- `lock = { param = "project" }` 按枚举和选项 ID 互斥。引用同一枚举同一选项的动作共享锁，派生 Action 也参与互斥。
 
-Action、枚举、选项和参数的 ID 使用字母、数字、下划线或连字符，首字符为字母、数字或下划线。修改后执行以下命令使配置生效。
+Action、组、枚举、选项和参数的 ID 使用字母、数字、下划线或连字符，首字符为字母、数字或下划线。修改后执行以下命令使配置生效。
 
 ```sh
 sudo /usr/local/bin/runlever check --config /etc/runlever/config.toml
@@ -45,6 +45,24 @@ sudo systemctl restart runlever
 ```
 
 服务以专用账户 `runlever` 的身份执行命令。按实际动作配置目录读取权限和工具访问权限。如果主机通过 `docker` 组管理 Docker socket，管理员可执行 `sudo usermod -aG docker runlever` 后重启 Runlever 服务。能够访问常规 rootful Docker socket 的账户具有主机 root 级能力。[Docker 主机权限说明](https://docs.docker.com/engine/install/linux-postinstall/)
+
+### 分组、并发和排队
+
+```toml
+[groups.compose]
+label = "Compose 管理"
+max_concurrent = 2
+
+[queue]
+max_wait_seconds = 60
+max_pending = 16
+```
+
+在现有 Action 的配置表中设置 `group = "compose"`，网页会按组展示。组内并发上限为 `1` 时全组串行，设为 `2` 时可同时执行两条。省略 `max_concurrent` 时只按组展示。派生 Action 继承目标的组，如果目标未分组，则可单独指定组。
+
+Action 必须同时满足组并发上限和参数锁条件才能启动。例如 Compose 组允许两条并行时，两个不同项目可以同时操作，同一项目仍然互斥。暂时无法执行的请求进入队列，服务按受理顺序启动当前满足条件的请求。
+
+`max_wait_seconds` 是等待启动的时限，默认 60 秒，须为正整数。`max_pending` 是全服务可等待的请求数，默认 16，运行中的请求不计入。设为 0 可关闭排队。等待超时后，记录显示「排队超时」，命令不会启动。
 
 ## Webhook
 
@@ -56,11 +74,13 @@ curl --fail-with-body -X POST https://ops.example.com/hooks/restart-forgejo \
   -H 'Content-Type: application/json' -d '{}'
 ```
 
-无参数动作也接受空正文。对于仍有枚举输入的动作，正文直接提交键值对象，例如 `{"project":"immich"}`。成功受理返回 `202` 和 `{"run_id":123}`。未知选项、额外字段或覆盖绑定值会被拒绝。管理员可在网页查询网页及 webhook 触发的运行。
+无参数动作也接受空正文。对于仍有枚举输入的动作，正文直接提交键值对象，例如 `{"project":"immich"}`。成功受理返回 `202` 和 `{"run_id":123}`，排队中的请求也有执行记录。队列满时，需要等待的新请求返回 `429`。未知选项、额外字段或覆盖绑定值会被拒绝。管理员可在网页查询网页及 webhook 触发的运行。
 
 ## 执行记录与日志保留
 
-动作页的“本次执行”和历史详情共用日志视图。按序接收 stdout、stderr，刷新后可以回到同一次运行。进程输出收齐后记录退出结果，零退出码标为成功。运行途中服务重启会将该条记录标为中断。
+动作页的“本次执行”和历史详情共用日志视图。排队中会实时更新状态，开始运行后按序接收 stdout、stderr，刷新后可以回到同一次运行。进程输出收齐后记录退出结果，零退出码标为成功。服务重启时会将此前排队中的和运行中的请求标为中断。
+
+`GET /api/runs/{id}` 中，`submitted_at` 是受理时间，命令尚未启动时 `started_at` 为 `null`。排队和排队超时分别使用 `queued` 和 `queue_timeout` 状态。事件流以 `status` 传送进行中的状态，以 `done` 传送最终结果。
 
 ```toml
 [logs]

@@ -26,7 +26,7 @@ pub(super) struct OutputChunk {
 pub(super) async fn execute(
     store: &Arc<Store>,
     id: i64,
-    invocation: Invocation,
+    invocation: &Invocation,
     redactor: &Redactor,
 ) -> Result<ExitStatus> {
     let mut command = Command::new(&invocation.program);
@@ -49,7 +49,7 @@ pub(super) async fn execute(
     let stdout = child.stdout.take().context("open the child stdout pipe")?;
     let stderr = child.stderr.take().context("open the child stderr pipe")?;
     let (sender, receiver) = mpsc::channel(QUEUE_CAPACITY);
-    let collect = async move {
+    let collect = async {
         let wait = async { child.wait().await.context("wait for the child process") };
         let (status, (), ()) = tokio::try_join!(
             wait,
@@ -59,14 +59,19 @@ pub(super) async fn execute(
         Ok(status)
     };
 
-    // A read failure closes the pipes and drops the child. Drain the chunks
-    // already in the queue before reporting it. A storage failure stops the
-    // child immediately because its output can no longer be persisted.
-    let (exit, ()) = tokio::try_join!(
+    // Drain already-buffered output after a read failure. Stop the child and
+    // wait for it before returning an error that releases its execution slots.
+    let result = tokio::try_join!(
         async { Ok::<_, anyhow::Error>(collect.await) },
         write_output(store, id, receiver),
-    )?;
-    exit
+    )
+    .and_then(|(exit, ())| exit);
+    if result.is_err()
+        && let Err(error) = child.kill().await
+    {
+        tracing::error!(?error, "could not stop child after capturing output failed");
+    }
+    result
 }
 
 async fn read_output(

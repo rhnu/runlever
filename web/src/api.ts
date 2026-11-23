@@ -3,7 +3,7 @@ import type { Action, Filters, Run, Selections } from "./model";
 export class ApiError extends Error {
   constructor(
     readonly status: number,
-    readonly detail: { error?: string; run_id?: number },
+    readonly detail: { error?: string },
   ) {
     super(detail.error || `HTTP ${status}`);
   }
