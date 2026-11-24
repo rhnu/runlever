@@ -7,8 +7,8 @@ Runlever 在一台 Linux 主机上运行管理员预先定义的 Action。通过
 从 GitHub Releases 下载与 `uname -m` 相符的发行包。以 x86_64、部署地址 `https://ops.example.com` 为例，在 VPS 上运行以下命令。ARM64 使用文件名中的 `aarch64`。
 
 ```sh
-tar -xzf runlever-0.2.0-linux-x86_64.tar.gz
-cd runlever-0.2.0-linux-x86_64
+tar -xzf runlever-0.3.0-linux-x86_64.tar.gz
+cd runlever-0.3.0-linux-x86_64
 sudo ./runlever service install --origin https://ops.example.com
 ```
 
