@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { api, isUnauthorized } from "./api";
 import { formatDuration, matchesFilters, selectionLabel, sources, statuses } from "./model";
 import type { Action, Filters, Run } from "./model";
 import { historyHref, Link, navigate } from "./route";
-import { Feedback, RunPanel, RunTime, StatusBadge } from "./RunPanel";
+import { RunDrawer } from "./RunDrawer";
+import { Feedback, Icon, RunTime, StatusBadge } from "./ui";
 
 const pageSize = 50;
 
@@ -20,14 +21,11 @@ export function HistoryPage(props: HistoryPageProps) {
 
 function HistoryResults({ actions, filters, run, onUnauthorized }: HistoryPageProps) {
   const [records, setRecords] = useState<Run[]>([]);
-  const [defaultRun, setDefaultRun] = useState<number>();
   const [more, setMore] = useState(false);
   const [pending, setPending] = useState(true);
   const [fault, setFault] = useState<"initial" | "more">();
   const [request, setRequest] = useState<{ before?: number }>({});
   const [seenActions, setSeenActions] = useState<Record<string, string>>({});
-  const selected = run ?? defaultRun;
-  const mobileBack = useRef<HTMLAnchorElement>(null);
 
   const { action, source, status } = filters;
   useEffect(() => {
@@ -45,7 +43,6 @@ function HistoryResults({ actions, filters, run, onUnauthorized }: HistoryPagePr
             ? page
             : [...previous, ...page.filter((item) => !previous.some(({ id }) => id === item.id))],
         );
-        setDefaultRun((previous) => previous ?? page[0]?.id);
         setMore(page.length === pageSize);
         setPending(false);
       },
@@ -58,10 +55,6 @@ function HistoryResults({ actions, filters, run, onUnauthorized }: HistoryPagePr
     );
     return () => controller.abort();
   }, [action, source, status, request, onUnauthorized]);
-
-  useEffect(() => {
-    if (run && matchMedia("(max-width: 760px)").matches) mobileBack.current?.focus();
-  }, [run]);
 
   const updateRun = useCallback(
     (next: Run) => {
@@ -92,7 +85,7 @@ function HistoryResults({ actions, filters, run, onUnauthorized }: HistoryPagePr
   const hasFilters = Boolean(action || status || source);
 
   return (
-    <div className="history-content" data-open={Boolean(run)}>
+    <div className="history-content">
       <fieldset className="filters" aria-label="筛选执行记录">
         <label>
           动作
@@ -141,89 +134,101 @@ function HistoryResults({ actions, filters, run, onUnauthorized }: HistoryPagePr
         </label>
         <button
           className="button button-secondary refresh"
+          type="button"
           disabled={pending}
           onClick={() => load()}
         >
+          <Icon name="refresh" />
           刷新
         </button>
       </fieldset>
-      <div className="split split-history" data-open={Boolean(run)}>
-        <nav className="record-list" aria-label="执行记录列表" aria-busy={pending}>
-          <ul>
-            {records.map((item) => {
-              const action = actionById.get(item.action);
-              const target = actionById.get(item.target);
-              const choices = Object.entries(item.selections).map(
-                ([key, value]) => selectionLabel(action, key, value, target).value,
-              );
-              const description = choices
-                .filter((choice) => !item.label.includes(choice))
-                .join(" / ");
-              return (
-                <li key={item.id}>
-                  <Link
-                    className="record-row"
-                    aria-current={selected === item.id ? "page" : undefined}
-                    href={historyHref(item.id, filters)}
-                  >
-                    <div className="record-summary">
-                      <span className="record-title">{item.label}</span>
-                      {description && <span className="record-choices">{description}</span>}
-                      <div className="record-meta">
-                        <RunTime timestamp={item.submitted_at} />
-                        {item.started_at !== null && item.finished_at !== null && (
-                          <span>{formatDuration(item.started_at, item.finished_at)}</span>
-                        )}
-                      </div>
-                    </div>
-                    <StatusBadge status={item.status} />
-                  </Link>
-                </li>
-              );
-            })}
-          </ul>
-          {pending && records.length === 0 && <Feedback>正在读取执行记录…</Feedback>}
-          {fault === "initial" && <Feedback retry={() => load()}>无法读取执行记录。</Feedback>}
-          {fault === "more" && (
-            <Feedback retry={() => load(request.before)}>无法读取较早的执行记录。</Feedback>
-          )}
-          {!pending && !fault && records.length === 0 && (
-            <Feedback>{hasFilters ? "没有符合条件的执行记录。" : "还没有执行记录。"}</Feedback>
-          )}
-          {more && !fault && records.length > 0 && (
-            <div className="load-more">
-              <button
-                className="button button-secondary"
-                disabled={pending}
-                onClick={() => load(records.at(-1)?.id)}
-              >
-                {pending ? "正在加载…" : "加载更早的记录"}
-              </button>
+      <section className="record-list" aria-label="执行记录列表" aria-busy={pending}>
+        {records.length > 0 && (
+          <>
+            <div className="record-head" aria-hidden="true">
+              <span className="record-title">动作</span>
+              <span className="record-choices">参数</span>
+              <span className="record-status">状态</span>
+              <span className="record-source">来源</span>
+              <span className="record-submitted">提交时间</span>
+              <span className="record-duration">耗时</span>
+              <span className="record-chevron" />
             </div>
-          )}
-        </nav>
-        <div className="detail">
-          <Link
-            className="mobile-back text-link"
-            href={historyHref(undefined, filters)}
-            ref={mobileBack}
-          >
-            ← 返回执行记录
-          </Link>
-          {selected !== undefined ? (
-            <RunPanel
-              key={selected}
-              id={selected}
-              mode="history"
-              actions={actions}
-              onUnauthorized={onUnauthorized}
-              onRun={updateRun}
-            />
-          ) : (
-            <Feedback>{pending ? "正在读取记录…" : "选择一条记录查看详情。"}</Feedback>
-          )}
-        </div>
-      </div>
+            <ul>
+              {records.map((item) => {
+                const action = actionById.get(item.action);
+                const target = actionById.get(item.target);
+                const choices = Object.entries(item.selections)
+                  .map(([key, value]) => selectionLabel(action, key, value, target).value)
+                  .join(" / ");
+                const duration =
+                  item.started_at !== null && item.finished_at !== null
+                    ? formatDuration(item.started_at, item.finished_at)
+                    : "—";
+                return (
+                  <li key={item.id}>
+                    <Link
+                      id={`history-run-${item.id}`}
+                      className="record-row"
+                      aria-current={run === item.id ? "page" : undefined}
+                      href={historyHref(item.id, filters)}
+                    >
+                      <span className="record-title" title={item.label}>
+                        {item.label}
+                      </span>
+                      <span className="record-choices" title={choices || undefined}>
+                        {choices || "—"}
+                      </span>
+                      <span className="record-status">
+                        <StatusBadge status={item.status} />
+                      </span>
+                      <span className="record-source">{sources[item.source]}</span>
+                      <span className="record-submitted">
+                        <RunTime timestamp={item.submitted_at} />
+                      </span>
+                      <span className="record-duration">{duration}</span>
+                      <span className="record-chevron" aria-hidden="true">
+                        <Icon name="chevron-right" />
+                      </span>
+                    </Link>
+                  </li>
+                );
+              })}
+            </ul>
+          </>
+        )}
+        {pending && records.length === 0 && <Feedback>正在读取执行记录…</Feedback>}
+        {fault === "initial" && <Feedback retry={() => load()}>无法读取执行记录。</Feedback>}
+        {fault === "more" && (
+          <Feedback retry={() => load(request.before)}>无法读取较早的执行记录。</Feedback>
+        )}
+        {!pending && !fault && records.length === 0 && (
+          <Feedback>{hasFilters ? "没有符合条件的执行记录。" : "还没有执行记录。"}</Feedback>
+        )}
+        {more && !fault && records.length > 0 && (
+          <div className="load-more">
+            <button
+              className="button button-secondary"
+              type="button"
+              disabled={pending}
+              onClick={() => load(records.at(-1)?.id)}
+            >
+              {pending ? "正在加载…" : "加载更早的记录"}
+            </button>
+          </div>
+        )}
+      </section>
+      {run !== undefined && (
+        <RunDrawer
+          key={run}
+          id={run}
+          actions={actions}
+          onUnauthorized={onUnauthorized}
+          onRun={updateRun}
+          closeHref={historyHref(undefined, filters)}
+          returnFocusId={`history-run-${run}`}
+        />
+      )}
     </div>
   );
 }

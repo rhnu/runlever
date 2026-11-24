@@ -1,9 +1,9 @@
-import { useEffect, useRef, useState } from "react";
-import type { FormEvent } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { api, ApiError, isUnauthorized } from "./api";
-import type { Action, ActionInput } from "./model";
+import type { Action } from "./model";
 import { actionHref, Link } from "./route";
-import { Feedback, RunPanel } from "./RunPanel";
+import { RunDrawer } from "./RunDrawer";
+import { Feedback, Icon } from "./ui";
 
 interface ActionsPageProps {
   actions: Action[];
@@ -22,124 +22,127 @@ export function ActionsPage({
   onRunStarted,
   onUnauthorized,
 }: ActionsPageProps) {
-  const action = actionId ? actions.find((item) => item.id === actionId) : actions[0];
-  const runId = run ?? (action && currentRuns.get(action.id));
-  const mobileBack = useRef<HTMLAnchorElement>(null);
-  const showDetail = Boolean(actionId || run);
+  const selectedId = actions.find((action) => action.id === actionId)?.id;
+  const previousTarget = useRef<{ actionId: string | undefined; run: number | undefined }>(null);
 
-  useEffect(() => {
-    if (showDetail && matchMedia("(max-width: 760px)").matches) mobileBack.current?.focus();
-  }, [showDetail]);
-
-  if (actions.length === 0 && runId === undefined) {
-    return <Feedback>还没有配置动作。</Feedback>;
-  }
+  useLayoutEffect(() => {
+    const previous = previousTarget.current;
+    previousTarget.current = { actionId: selectedId, run };
+    // Opening or closing a run should keep the list at its current scroll position.
+    if (
+      selectedId &&
+      (!previous ||
+        (previous.actionId !== selectedId && previous.run === undefined && run === undefined))
+    ) {
+      document.getElementById(`action-row-${selectedId}`)?.scrollIntoView({ block: "nearest" });
+    }
+  }, [selectedId, run]);
 
   const groups = new Map<string | undefined, { label: string; items: Action[] }>();
-  for (const item of actions) {
-    const id = item.group?.id;
+  for (const action of actions) {
+    const id = action.group?.id;
     const group = groups.get(id);
-    if (group) group.items.push(item);
-    else groups.set(id, { label: item.group?.label ?? "未分组", items: [item] });
+    if (group) group.items.push(action);
+    else groups.set(id, { label: action.group?.label ?? "未分组", items: [action] });
   }
 
   return (
-    <div className="split split-actions" data-open={showDetail}>
-      <nav className="record-list" aria-label="动作列表">
-        {[...groups].map(([id, group]) => {
-          const heading = id !== undefined || groups.size > 1;
-          const headingId = id === undefined ? "actions-ungrouped" : `actions-group-${id}`;
-          return (
-            <section key={headingId} aria-labelledby={heading ? headingId : undefined}>
-              {heading && (
-                <h2 className="action-group-title" id={headingId}>
-                  {group.label}
-                </h2>
-              )}
-              <ul>
-                {group.items.map((item) => (
-                  <li key={item.id}>
-                    <Link
-                      className="record-row"
-                      href={actionHref(
-                        item.id,
-                        (item.id === actionId ? run : undefined) ?? currentRuns.get(item.id),
-                      )}
-                      aria-current={action?.id === item.id ? "page" : undefined}
+    <>
+      {actionId && !selectedId ? (
+        <Feedback>此动作已不在当前配置中。</Feedback>
+      ) : actions.length === 0 ? (
+        <Feedback>还没有配置动作。</Feedback>
+      ) : null}
+      {groups.size > 0 && (
+        <div className="actions-list">
+          {[...groups].map(([id, group]) => {
+            const heading = id !== undefined || groups.size > 1;
+            const headingId = id === undefined ? "actions-ungrouped" : `actions-group-${id}`;
+            return (
+              <section
+                className="action-group"
+                key={headingId}
+                aria-labelledby={heading ? headingId : undefined}
+              >
+                {heading && (
+                  <h2 className="action-group-title" id={headingId}>
+                    {group.label}
+                  </h2>
+                )}
+                <div className="action-columns" aria-hidden="true">
+                  <span>动作名称</span>
+                  <span>参数</span>
+                  <span>运行</span>
+                </div>
+                <ul className="action-group-list">
+                  {group.items.map((action) => (
+                    <li
+                      key={action.id}
+                      id={`action-row-${action.id}`}
+                      className="action-item"
+                      data-selected={action.id === selectedId || undefined}
                     >
-                      <span className="record-title">{item.label}</span>
-                    </Link>
-                  </li>
-                ))}
-              </ul>
-            </section>
-          );
-        })}
-      </nav>
-      <div className="detail">
-        <Link className="mobile-back text-link" href={actionHref()} ref={mobileBack}>
-          ← 返回动作列表
-        </Link>
-        {action ? (
-          <ActionForm
-            key={action.id}
-            action={action}
-            onRunStarted={onRunStarted}
-            onUnauthorized={onUnauthorized}
-          />
-        ) : (
-          <Feedback>此动作已不在当前配置中。</Feedback>
-        )}
-        {runId !== undefined && (
-          <div className="action-result">
-            <RunPanel
-              key={runId}
-              id={runId}
-              mode="actions"
-              actions={actions}
-              onUnauthorized={onUnauthorized}
-            />
-          </div>
-        )}
-      </div>
-    </div>
+                      <ActionForm
+                        action={action}
+                        latestRun={currentRuns.get(action.id)}
+                        onRunStarted={onRunStarted}
+                        onUnauthorized={onUnauthorized}
+                      />
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            );
+          })}
+        </div>
+      )}
+      {run !== undefined && (
+        <RunDrawer
+          key={run}
+          id={run}
+          actions={actions}
+          onUnauthorized={onUnauthorized}
+          closeHref={actionHref(actionId)}
+          returnFocusId={actionId ? `action-run-${actionId}` : undefined}
+          showHistoryLink
+        />
+      )}
+    </>
   );
 }
 
 interface ActionFormProps {
   action: Action;
+  latestRun?: number;
   onRunStarted: ActionsPageProps["onRunStarted"];
   onUnauthorized: ActionsPageProps["onUnauthorized"];
 }
 
-function ActionForm({ action, onRunStarted, onUnauthorized }: ActionFormProps) {
+function ActionForm({ action, latestRun, onRunStarted, onUnauthorized }: ActionFormProps) {
   const [selections, setSelections] = useState<ReadonlyMap<string, string>>(() => new Map());
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string>();
-  const inputsReady = action.inputs.every((input) => input.options.length > 0);
-  const choiceLabels = action.inputs.map(
-    (input) => input.options.find((option) => option.id === selections.get(input.id))?.label,
-  );
-  const ready = inputsReady && choiceLabels.every((label) => label !== undefined);
-  let caption = action.label;
-  if (ready && choiceLabels.length === 1) caption = `${action.label} ${choiceLabels[0]}`;
-  else if (ready && choiceLabels.length > 1) caption = choiceLabels.join(" ");
+  const submitting = useRef(false);
   const fields = action.inputs.map((input) => ({
     input,
-    compact:
-      input.options.length >= 3 &&
-      input.options.length <= 5 &&
-      input.options.every(({ label }) => label.length <= 12),
+    value: input.options.find((option) => option.id === selections.get(input.id))?.id ?? "",
   }));
+  const ready = fields.every(({ value }) => value !== "");
+  const inputsReady = fields.every(({ input }) => input.options.length > 0);
+  const problemId = `action-problem-${action.id}`;
 
-  async function execute(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (busy || !ready) return;
+  async function execute() {
+    if (submitting.current || !ready) return;
+    submitting.current = true;
     setBusy(true);
     setProblem(undefined);
+    let runId: number;
     try {
-      const { run_id } = await api.start(action.id, Object.fromEntries(selections));
-      onRunStarted(action.id, run_id);
+      const submitted = Object.fromEntries<string>(
+        fields.map(({ input, value }) => [input.id, value]),
+      );
+      const result = await api.start(action.id, submitted);
+      runId = result.run_id;
     } catch (error) {
       if (isUnauthorized(error)) onUnauthorized();
       else if (error instanceof ApiError && error.status === 429) {
@@ -149,106 +152,86 @@ function ActionForm({ action, onRunStarted, onUnauthorized }: ActionFormProps) {
       } else {
         setProblem("未能确认执行请求，请查看执行记录。");
       }
+      return;
     } finally {
+      submitting.current = false;
       setBusy(false);
     }
+    onRunStarted(action.id, runId);
   }
 
+  // Require the Run button so using Enter in a select cannot submit the action.
   return (
-    <section aria-labelledby="action-heading">
-      <h2 className="detail-title" id="action-heading">
+    <form
+      className="action-row"
+      onSubmit={(event) => event.preventDefault()}
+      aria-labelledby={`action-name-${action.id}`}
+      aria-describedby={problem || !inputsReady ? problemId : undefined}
+      aria-busy={busy}
+    >
+      <span className="action-name" id={`action-name-${action.id}`}>
         {action.label}
-      </h2>
-      <form className="action-form" onSubmit={(event) => void execute(event)} aria-busy={busy}>
-        {fields.map(({ input, compact }) => (
-          <EnumField
-            key={input.id}
-            input={input}
-            compact={compact}
-            disabled={busy}
-            value={selections.get(input.id) ?? ""}
-            onChange={(value) =>
-              setSelections((previous) => new Map(previous).set(input.id, value))
-            }
-          />
-        ))}
-        {!inputsReady && (
-          <p className="field-error" role="alert">
-            有参数缺少可选值，请检查动作配置。
-          </p>
-        )}
-        <div className="form-actions">
-          <button
-            className="button button-primary"
-            disabled={busy || !ready}
-            aria-label={
-              busy || caption === action.label ? undefined : `${caption}，${action.label}`
-            }
-          >
-            {busy ? "正在提交…" : caption}
-          </button>
-        </div>
-      </form>
-      {problem && (
-        <div className="action-problem" role="alert">
-          {problem}
-        </div>
-      )}
-    </section>
-  );
-}
-
-interface EnumFieldProps {
-  input: ActionInput;
-  value: string;
-  disabled: boolean;
-  compact: boolean;
-  onChange: (value: string) => void;
-}
-
-function EnumField({ input, value, disabled, compact, onChange }: EnumFieldProps) {
-  if (!compact) {
-    return (
-      <label className="enum-field">
-        <span>{input.label}</span>
-        <select
-          className="select"
-          value={value}
-          onChange={(event) => onChange(event.target.value)}
-          disabled={disabled}
-          required
-        >
-          <option value="" disabled>
-            请选择
-          </option>
-          {input.options.map((option) => (
-            <option key={option.id} value={option.id}>
-              {option.label}
-            </option>
+      </span>
+      {fields.length > 0 ? (
+        <div className="action-parameters">
+          {fields.map(({ input, value }) => (
+            <label className="enum-field" key={input.id}>
+              <span>{input.label}</span>
+              <select
+                className="select"
+                value={value}
+                disabled={busy || input.options.length === 0}
+                onChange={(event) => {
+                  const selected = event.currentTarget.value;
+                  setSelections((previous) => new Map(previous).set(input.id, selected));
+                }}
+                required
+              >
+                <option value="" disabled>
+                  请选择
+                </option>
+                {input.options.map((option) => (
+                  <option key={option.id} value={option.id}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
           ))}
-        </select>
-      </label>
-    );
-  }
-
-  return (
-    <fieldset className="enum-field" disabled={disabled}>
-      <legend>{input.label}</legend>
-      <div className="enum-options">
-        {input.options.map((option) => (
-          <label key={option.id} className="enum-option">
-            <input
-              type="radio"
-              name={input.id}
-              value={option.id}
-              checked={value === option.id}
-              onChange={(event) => onChange(event.target.value)}
-              required
-            />
-            <span>{option.label}</span>
-          </label>
-        ))}
+        </div>
+      ) : (
+        <span className="no-parameters" aria-label="无需参数">
+          —
+        </span>
+      )}
+      <div className="action-controls">
+        {latestRun !== undefined && (
+          <Link
+            className="action-latest-run"
+            href={actionHref(action.id, latestRun)}
+            aria-label={`查看「${action.label}」最近一次运行`}
+            title="查看最近一次运行"
+          >
+            <Icon name="terminal" />
+          </Link>
+        )}
+        <button
+          className={fields.length ? "button button-primary" : "button button-secondary"}
+          id={`action-run-${action.id}`}
+          type="button"
+          disabled={busy || !ready}
+          aria-label={busy ? `正在提交「${action.label}」` : `运行「${action.label}」`}
+          onClick={() => void execute()}
+        >
+          <Icon name="play" />
+          {busy ? "正在提交…" : "运行"}
+        </button>
       </div>
-    </fieldset>
+      {(!inputsReady || problem) && (
+        <p className="action-problem field-error" id={problemId} role="alert">
+          {!inputsReady ? "有参数缺少可选值，请检查动作配置。" : problem}
+        </p>
+      )}
+    </form>
   );
 }

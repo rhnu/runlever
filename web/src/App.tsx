@@ -5,7 +5,7 @@ import { ActionsPage } from "./ActionsPage";
 import { HistoryPage } from "./HistoryPage";
 import type { Action } from "./model";
 import { actionHref, historyHref, Link, navigate, readRoute, useRoute } from "./route";
-import { Feedback } from "./RunPanel";
+import { Feedback } from "./ui";
 
 type Session =
   | { state: "checking" }
@@ -77,11 +77,8 @@ export function App() {
   function started(action: string, run: number) {
     setCurrentRuns((previous) => new Map(previous).set(action, run));
     const current = readRoute();
-    if (
-      current.view === "actions" &&
-      (current.action === action ||
-        (!current.action && session.state === "ready" && session.actions[0]?.id === action))
-    ) {
+    // Another accepted run is still available on its row if the user is reading a drawer.
+    if (current.view === "actions" && current.run === undefined) {
       navigate(actionHref(action, run));
     }
   }
@@ -107,34 +104,34 @@ export function App() {
       <a className="skip-link" href="#main-content">
         跳到主要内容
       </a>
-      <aside className="sidebar" aria-label="应用导航">
-        <Brand />
-        <nav className="primary-nav" aria-label="主导航">
-          <Link href={actionHref()} aria-current={view === "actions" ? "page" : undefined}>
-            <span aria-hidden="true" className="nav-icon nav-bolt" />
-            动作
-          </Link>
-          <Link href={historyHref()} aria-current={view === "history" ? "page" : undefined}>
-            <span aria-hidden="true" className="nav-icon nav-history" />
-            执行记录
-          </Link>
-        </nav>
-        <div className="account">
-          <button
-            className="button button-secondary"
-            disabled={logoutPending}
-            onClick={() => void logout()}
-          >
-            {logoutPending ? "正在退出…" : "退出登录"}
-          </button>
-          {logoutError && (
-            <p className="field-error" role="alert">
-              退出失败，请重试。
-            </p>
-          )}
+      <header className="app-header">
+        <div className="header-inner">
+          <Brand />
+          <nav className="primary-nav" aria-label="主导航">
+            <Link href={actionHref()} aria-current={view === "actions" ? "page" : undefined}>
+              动作
+            </Link>
+            <Link href={historyHref()} aria-current={view === "history" ? "page" : undefined}>
+              执行记录
+            </Link>
+          </nav>
+          <div className="account">
+            <button
+              className="button button-quiet"
+              disabled={logoutPending}
+              onClick={() => void logout()}
+            >
+              {logoutPending ? "正在退出…" : "退出"}
+            </button>
+            {logoutError && (
+              <p className="field-error" role="alert">
+                退出失败，请重试。
+              </p>
+            )}
+          </div>
         </div>
-      </aside>
-      <main className="main-content" id="main-content">
+      </header>
+      <main className={`main-content page-${view}`} id="main-content" tabIndex={-1}>
         <header className="page-heading">
           <h1>{pageTitle}</h1>
         </header>
@@ -163,7 +160,11 @@ export function App() {
 function Brand() {
   return (
     <div className="brand">
-      <span className="brand-mark" aria-hidden="true" />
+      <svg className="brand-mark" viewBox="0 0 26 26" aria-hidden="true" fill="currentColor">
+        <path d="M2 23h21v-2H2zM5 20v-2a3 3 0 0 1 3-3h5a3 3 0 0 1 3 3v2z" />
+        <path d="m10 17 11-12" fill="none" stroke="currentColor" strokeWidth="2" />
+        <circle cx="21" cy="5" r="3" />
+      </svg>
       Runlever
     </div>
   );

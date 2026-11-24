@@ -54,8 +54,20 @@ function href(params: URLSearchParams) {
 export function navigate(url: string, replace = false) {
   if (url === `${location.pathname}${location.search}`) return;
   if (replace) history.replaceState(null, "", url);
-  else history.pushState(null, "", url);
+  else {
+    const current = readRoute();
+    const next = new URL(url, location.href).searchParams;
+    const nextView = next.get("view") === "history" ? "history" : "actions";
+    // Only an in-page drawer has a list entry immediately behind it in browser history.
+    const fromList = current.run === undefined && next.has("run") && current.view === nextView;
+    history.pushState(fromList ? { fromRunList: true } : null, "", url);
+  }
   dispatchEvent(new PopStateEvent("popstate"));
+}
+
+export function closeRun(listHref: string) {
+  if (history.state?.fromRunList) history.back();
+  else navigate(listHref, true);
 }
 
 export function useRoute() {
@@ -81,6 +93,7 @@ export function Link({ href, onClick, children, ...props }: ComponentPropsWithRe
       !event.shiftKey
     ) {
       event.preventDefault();
+      event.currentTarget.focus({ preventScroll: true });
       navigate(href);
     }
   }

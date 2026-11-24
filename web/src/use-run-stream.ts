@@ -3,7 +3,14 @@ import { api, ApiError, isUnauthorized } from "./api";
 import { appendLog, newLogBuffer } from "./log-buffer";
 import type { LogChunk, Run } from "./model";
 
-type Connection = "loading" | "connecting" | "open" | "reconnecting" | "done" | "failed";
+type Connection =
+  | "loading"
+  | "connecting"
+  | "open"
+  | "reconnecting"
+  | "done"
+  | "failed"
+  | "missing";
 
 export function useRunStream(
   id: number,
@@ -53,9 +60,9 @@ export function useRunStream(
       onUnauthorized();
     }
 
-    function fail(message: string) {
+    function fail(message: string, state: "failed" | "missing" = "failed") {
       stopFeed();
-      setConnection("failed");
+      setConnection(state);
       setError(message);
     }
 
@@ -82,7 +89,7 @@ export function useRunStream(
             return;
           }
           if (error instanceof ApiError && error.status === 404) {
-            fail("这条执行记录已不存在。");
+            fail("这条执行记录已不存在。", "missing");
             return;
           }
         }
@@ -146,7 +153,8 @@ export function useRunStream(
       (error: unknown) => {
         if (abort.signal.aborted) return;
         if (isUnauthorized(error)) unauthenticated();
-        else if (error instanceof ApiError && error.status === 404) fail("找不到这条执行记录。");
+        else if (error instanceof ApiError && error.status === 404)
+          fail("找不到这条执行记录。", "missing");
         else fail("无法读取执行记录，请重试。");
       },
     );
