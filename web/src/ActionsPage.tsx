@@ -49,9 +49,9 @@ export function ActionsPage({
   return (
     <>
       {actionId && !selectedId ? (
-        <Feedback>此动作已不在当前配置中。</Feedback>
+        <Feedback>此动作当前无法从网页运行。</Feedback>
       ) : actions.length === 0 ? (
-        <Feedback>还没有配置动作。</Feedback>
+        <Feedback>还没有可从网页运行的动作。</Feedback>
       ) : null}
       {groups.size > 0 && (
         <div className="actions-list">
@@ -100,7 +100,6 @@ export function ActionsPage({
         <RunDrawer
           key={run}
           id={run}
-          actions={actions}
           onUnauthorized={onUnauthorized}
           closeHref={actionHref(actionId)}
           returnFocusId={actionId ? `action-run-${actionId}` : undefined}

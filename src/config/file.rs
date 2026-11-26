@@ -3,12 +3,12 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use super::{
-    Action, Argument, Catalog, Enums, Execution, Group, Input, Inputs, Parameter, QueueConfig,
-    normalize_origin,
+    Action, Argument, Catalog, Enums, Execution, Exposure, Group, Input, Inputs, Parameter,
+    QueueConfig, normalize_origin,
 };
 use anyhow::{Context, Result, anyhow, bail, ensure};
 use indexmap::IndexMap;
-use serde::Deserialize;
+use serde::{Deserialize, de::IgnoredAny};
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -51,7 +51,10 @@ struct ActionFile {
     exec: Option<Exec>,
     call: Option<String>,
     bind: Option<BTreeMap<String, String>>,
-    webhook: Option<Webhook>,
+    #[serde(default)]
+    expose: Exposure,
+    #[serde(rename = "webhook")]
+    legacy_webhook: Option<IgnoredAny>,
 }
 
 #[derive(Deserialize)]
@@ -79,16 +82,10 @@ struct Exec {
     cwd: Option<Argument>,
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Webhook {
-    token: String,
-}
-
 struct Definition {
     label: String,
     group: Option<String>,
-    webhook_token: Option<String>,
+    expose: Exposure,
     body: Body,
 }
 
@@ -221,7 +218,7 @@ fn validate_webhook_tokens(
 ) -> Result<()> {
     let mut used_tokens = HashMap::new();
     for (id, definition) in definitions {
-        if let Some(token) = definition.webhook_token.as_deref() {
+        if let Some(token) = definition.expose.webhook_token() {
             ensure!(
                 !token.trim().is_empty(),
                 "action {id:?} webhook token must be nonempty"
@@ -241,6 +238,10 @@ fn validate_webhook_tokens(
 impl Definition {
     fn new(id: &str, action: ActionFile, enums: &Enums) -> Result<Self> {
         ensure!(valid_id(id), "invalid action ID");
+        ensure!(
+            action.legacy_webhook.is_none(),
+            "move webhook.token to expose.webhook.token"
+        );
         ensure!(!action.label.trim().is_empty(), "label must be nonempty");
 
         let body = match (action.exec, action.call) {
@@ -269,7 +270,7 @@ impl Definition {
         Ok(Self {
             label: action.label,
             group: action.group,
-            webhook_token: action.webhook.map(|webhook| webhook.token),
+            expose: action.expose,
             body,
         })
     }
@@ -415,7 +416,7 @@ fn compile_actions(
                 Action {
                     label: definition.label.clone(),
                     group: inherited_group.or(definition.group.as_ref()).cloned(),
-                    webhook_token: definition.webhook_token.clone(),
+                    expose: definition.expose.clone(),
                     execution,
                     bindings,
                 },

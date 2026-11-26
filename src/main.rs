@@ -64,7 +64,7 @@ async fn main() -> Result<()> {
     match Cli::parse().command {
         Command::Check { config } => {
             let catalog = Catalog::load(&config)?;
-            println!("配置有效（{} 个动作）", catalog.actions().len());
+            println!("配置有效（{} 个动作）", catalog.action_count());
             Ok(())
         }
         Command::Service {

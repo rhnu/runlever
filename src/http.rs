@@ -13,14 +13,14 @@ use axum::{
     routing::{get, post},
 };
 use rust_embed::RustEmbed;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tracing::error;
 
 use crate::auth::{self, Sessions};
 use runlever::{
-    config::Catalog,
-    engine::{Engine, RunFilter, StartError},
+    config::{Catalog, SelectionLabel},
+    engine::{Engine, Run, RunFilter, StartError},
 };
 
 #[derive(RustEmbed)]
@@ -32,6 +32,29 @@ struct App {
     catalog: Arc<Catalog>,
     engine: Engine,
     sessions: Arc<Sessions>,
+}
+
+#[derive(Serialize)]
+struct RunView<'a> {
+    #[serde(flatten)]
+    run: &'a Run,
+    selection_labels: BTreeMap<&'a str, SelectionLabel<'a>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    target_label: Option<&'a str>,
+}
+
+impl App {
+    fn run_view<'a>(&'a self, run: &'a Run) -> RunView<'a> {
+        RunView {
+            run,
+            selection_labels: self.catalog.selection_labels(
+                &run.action,
+                &run.target,
+                &run.selections,
+            ),
+            target_label: self.catalog.action_label(&run.target),
+        }
+    }
 }
 
 type Reply = Result<Response, ApiError>;
@@ -153,11 +176,11 @@ async fn logout(State(app): State<App>, headers: HeaderMap) -> Response {
 }
 
 async fn actions(State(app): State<App>) -> Response {
-    Json(app.catalog.actions()).into_response()
+    Json(app.catalog.web_actions()).into_response()
 }
 
 async fn web_run(State(app): State<App>, Path(id): Path<String>, body: Bytes) -> Reply {
-    if !app.catalog.has_action(&id) {
+    if !app.catalog.has_web_action(&id) {
         return Err(missing());
     }
     start(app, id, &body, "web").await
@@ -212,18 +235,19 @@ async fn start(app: App, id: String, body: &[u8], source: &str) -> Reply {
 }
 
 async fn runs(State(app): State<App>, Query(filter): Query<RunFilter>) -> Reply {
-    Ok(Json(app.engine.list(filter).await.map_err(internal)?).into_response())
+    let runs = app.engine.list(filter).await.map_err(internal)?;
+    let views: Vec<_> = runs.iter().map(|run| app.run_view(run)).collect();
+    Ok(Json(views).into_response())
 }
 
 async fn run(State(app): State<App>, Path(id): Path<i64>) -> Reply {
-    Ok(Json(
-        app.engine
-            .get(id)
-            .await
-            .map_err(internal)?
-            .ok_or_else(missing)?,
-    )
-    .into_response())
+    let run = app
+        .engine
+        .get(id)
+        .await
+        .map_err(internal)?
+        .ok_or_else(missing)?;
+    Ok(Json(app.run_view(&run)).into_response())
 }
 
 #[derive(Deserialize)]
@@ -265,7 +289,7 @@ async fn events(
             };
             if state.is_active() && active_status.as_ref() != Some(&state.status) {
                 active_status = Some(state.status.clone());
-                yield Event::default().event("status").json_data(&state);
+                yield Event::default().event("status").json_data(app.run_view(&state));
             }
             let batch = match app.engine.events(id, after).await {
                 Ok(batch) => batch,
@@ -285,7 +309,7 @@ async fn events(
                     Ok(None) => break,
                     Err(cause) => { error!(run_id=id, error=?cause, "read final stream status"); break; }
                 };
-                yield Event::default().event("done").json_data(latest);
+                yield Event::default().event("done").json_data(app.run_view(&latest));
                 break;
             }
             tokio::time::sleep(Duration::from_millis(350)).await;

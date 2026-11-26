@@ -26,6 +26,8 @@ ops.example.com {
 
 升级时解压新版本并再次运行 `sudo ./runlever service install`。安装器更新二进制和 [systemd unit](packaging/runlever.service)，保留现有配置、脚本和数据库，随后重启服务。请在执行和排队的动作均已结束后升级。0.2.0 启动时会迁移数据库，保留已有执行记录和日志。
 
+如果旧配置使用 Action 顶层的 `webhook`，请在升级前把它移到 `expose.webhook`。给所有需要继续在网页运行的 Action 添加 `expose.web = true`。使用新版本的 `sudo ./runlever check --config /etc/runlever/config.toml` 检查迁移后的配置，再运行安装命令。
+
 ## 定义动作
 
 编辑 `/etc/runlever/config.toml`。完整的 [示例配置](examples/config.toml) 给出了 Compose 管理、自选项目重启、固定重启 Forgejo 和单行命令四种用法。配套的 [脚本](examples/compose.sh) 安装在 `/usr/local/lib/runlever/compose.sh`。示例中的 `/opt/forgejo` 和 `/opt/immich` 应替换为本机实际的项目目录。
@@ -34,7 +36,7 @@ ops.example.com {
 - `inputs = { project = "projects" }` 让用户从 `enums.projects` 中选择。也可写 `project = { enum = "projects", label = "项目" }` 自定义控件名称。输入和选项按声明顺序展示。
 - `exec.program` 直接启动程序，`exec.args` 中每个固定字符串或 `{ param = "project" }` 都是一个独立参数。脚本的位置参数从 `$1` 开始。`exec.cwd` 可为固定目录或参数引用。
 - `exec.command` 接受管理员编写的固定 Shell 命令。例如 `exec = { command = 'docker compose --project-directory "$1" restart', args = [{ param = "project" }] }`。执行器调用 `/bin/sh -c`，通过独立的位置参数传值。
-- `call` 引用另一个 Action。`bind` 以选项 ID 固定参数。层层调用后，界面仅显示尚未绑定的输入，所有输入均已绑定时单击按钮即可执行。
+- `call` 引用另一个 Action。`bind` 以选项 ID 固定参数。网页上的动作只显示尚未绑定的输入，所有输入均已绑定时可直接点击运行。
 - `lock = { param = "project" }` 按枚举和选项 ID 互斥。引用同一枚举同一选项的动作共享锁，派生 Action 也参与互斥。
 
 Action、组、枚举、选项和参数的 ID 使用字母、数字、下划线或连字符，首字符为字母、数字或下划线。修改后执行以下命令使配置生效。
@@ -45,6 +47,13 @@ sudo systemctl restart runlever
 ```
 
 服务以专用账户 `runlever` 的身份执行命令。按实际动作配置目录读取权限和工具访问权限。如果主机通过 `docker` 组管理 Docker socket，管理员可执行 `sudo usermod -aG docker runlever` 后重启 Runlever 服务。能够访问常规 rootful Docker socket 的账户具有主机 root 级能力。[Docker 主机权限说明](https://docs.docker.com/engine/install/linux-postinstall/)
+
+### 执行入口
+
+在各 Action 的配置表内通过 `expose` 独立开启网页和 webhook。省略 `expose` 时，两种入口都关闭。`call` 可以引用入口均关闭的 Action，派生 Action 自行声明入口。
+
+- `expose.web = true` 将动作列在「动作」页面并允许从网页运行。未开启时，网页执行接口返回 `404`。
+- `expose.webhook = { token = "独立的随机密钥" }` 开启 webhook。可以和 `expose.web = true` 写在同一个 Action 表内。
 
 ### 分组、并发和排队
 
@@ -66,7 +75,7 @@ Action 必须同时满足组并发上限和参数锁条件才能启动。例如 
 
 ## Webhook
 
-每个需要从外部调用的 Action 单独添加 `webhook = { token = "独立的随机密钥" }`。各 hook 使用独立密钥，派生动作不会继承底层动作的 webhook。未启用的地址返回 `404`，认证失败返回 `401`。请求使用 `Authorization: Bearer`。
+各 webhook 使用独立密钥。未启用的地址返回 `404`，认证失败返回 `401`。请求使用 `Authorization: Bearer`。
 
 ```sh
 curl --fail-with-body -X POST https://ops.example.com/hooks/restart-forgejo \
@@ -82,7 +91,7 @@ curl --fail-with-body -X POST https://ops.example.com/hooks/restart-forgejo \
 
 抽屉实时显示排队和运行状态，按序接收 stdout、stderr。向上翻阅会暂停跟随，打开“跟随输出”可回到最新内容。刷新页面可以回到同一次运行。进程输出收齐后记录退出结果，零退出码标为成功。服务重启时会将此前排队中的和运行中的请求标为中断。
 
-`GET /api/runs/{id}` 中，`submitted_at` 是受理时间，命令尚未启动时 `started_at` 为 `null`。排队和排队超时分别使用 `queued` 和 `queue_timeout` 状态。事件流以 `status` 传送进行中的状态，以 `done` 传送最终结果。
+`GET /api/runs/{id}` 中，`submitted_at` 是受理时间，命令尚未启动时 `started_at` 为 `null`。`selection_labels` 提供已选参数和选项的显示名称，`target_label` 在当前配置能找到目标时提供目标名称。排队和排队超时分别使用 `queued` 和 `queue_timeout` 状态。事件流以 `status` 传送进行中的状态，以 `done` 传送最终结果。
 
 ```toml
 [logs]

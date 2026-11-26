@@ -19,25 +19,31 @@ restart = {label = "Restart", value = "compose-restart"}
 label = "Restart Zulu"
 call = "restart"
 bind = {z-project = "zulu"}
+expose.web = true
 
 [actions.run]
 label = "Run"
 inputs = {z-project = {enum = "projects", label = "Project"}, a-operation = "operations"}
 lock = {param = "z-project"}
 exec = {program = "tool", args = [{param = "z-project"}, "--", {param = "a-operation"}]}
-webhook = {token = "test-run-hook"}
+expose = {web = true, webhook = {token = "test-run-hook"}}
 
 [actions.restart]
 label = "Restart"
 call = "run"
 bind = {a-operation = "restart"}
-webhook = {token = "test-restart-hook"}
+expose.webhook = {token = "test-restart-hook"}
 
 [actions.command]
 label = "Run shell command"
 inputs = {project = "projects"}
 lock = {param = "project"}
 exec = {command = 'exec tool "$1"', cwd = {param = "project"}, args = [{param = "project"}]}
+expose.web = true
+
+[actions.internal]
+label = "Internal"
+call = "run"
 "#;
 
 fn selections(items: &[(&str, &str)]) -> BTreeMap<String, String> {
@@ -48,11 +54,12 @@ fn selections(items: &[(&str, &str)]) -> BTreeMap<String, String> {
 }
 
 #[test]
-fn exposes_only_public_action_metadata_in_declaration_order() {
+fn exposes_only_web_actions_and_their_public_metadata_in_declaration_order() {
     let catalog = Catalog::parse(EXAMPLE).unwrap();
-    let views = catalog.actions();
+    let views = catalog.web_actions();
     let ids: Vec<_> = views.iter().map(|action| action.id.as_str()).collect();
-    assert_eq!(ids, ["restart-zulu", "run", "restart", "command"]);
+    assert_eq!(ids, ["restart-zulu", "run", "command"]);
+    assert_eq!(catalog.action_count(), 5);
     assert_eq!(
         serde_json::to_value(&views[1]).unwrap(),
         json!({
@@ -73,12 +80,39 @@ fn exposes_only_public_action_metadata_in_declaration_order() {
         })
     );
     assert!(views[0].inputs.is_empty());
-    assert_eq!(views[2].inputs.len(), 1);
-    assert_eq!(views[2].inputs[0].id, "z-project");
-    assert_eq!(views[2].inputs[0].label, "Project");
+}
+
+#[test]
+fn exposes_web_and_webhook_independently_without_inheritance() {
+    let catalog = Catalog::parse(EXAMPLE).unwrap();
+    assert!(catalog.has_web_action("run"));
+    assert!(catalog.has_web_action("restart-zulu"));
+    assert!(!catalog.has_web_action("restart"));
+    assert!(!catalog.has_web_action("internal"));
+    assert!(!catalog.has_web_action("unknown"));
     assert_eq!(catalog.webhook_token("run"), Some("test-run-hook"));
     assert_eq!(catalog.webhook_token("restart"), Some("test-restart-hook"));
     assert_eq!(catalog.webhook_token("restart-zulu"), None);
+    assert_eq!(catalog.webhook_token("internal"), None);
+}
+
+#[test]
+fn looks_up_recorded_selection_labels_for_actions_without_web_access() {
+    let source = EXAMPLE.replace("web = true, webhook", "webhook");
+    let catalog = Catalog::parse(&source).unwrap();
+    assert!(!catalog.has_web_action("run"));
+    let recorded = selections(&[("z-project", "zulu"), ("a-operation", "restart")]);
+    let labels = catalog.selection_labels("restart", "run", &recorded);
+    assert_eq!(labels["z-project"].label, "Project");
+    assert_eq!(labels["z-project"].value, "Zulu");
+    assert_eq!(labels["a-operation"].value, "Restart");
+
+    let recorded = selections(&[("removed-input", "old-id"), ("z-project", "old-project")]);
+    let labels = catalog.selection_labels("removed-action", "run", &recorded);
+    assert_eq!(labels["removed-input"].label, "removed-input");
+    assert_eq!(labels["removed-input"].value, "old-id");
+    assert_eq!(labels["z-project"].label, "Project");
+    assert_eq!(labels["z-project"].value, "old-project");
 }
 
 #[test]
@@ -161,12 +195,12 @@ fn groups_apply_to_direct_and_derived_actions() {
         .resolve("command", &selections(&[("project", "zulu")]))
         .unwrap();
     assert!(command.group_limit.is_none());
-    let views = catalog.actions();
+    let views = catalog.web_actions();
     assert_eq!(
         serde_json::to_value(views[0].group.as_ref()).unwrap(),
         json!({"id": "compose", "label": "Compose"})
     );
-    assert_eq!(views[3].group.as_ref().unwrap().id, "shortcuts");
+    assert_eq!(views[2].group.as_ref().unwrap().id, "shortcuts");
 }
 
 #[test]
@@ -194,10 +228,12 @@ fn validates_groups_and_queue_limits() {
 label = "Base"
 group = "ops"
 exec = {program = "tool"}
+expose.web = true
 [actions.derived]
 label = "Derived"
 group = "other"
 call = "base"
+expose.web = true
 "#;
     let groups = "[groups.ops]\nlabel = 'Ops'\n[groups.other]\nlabel = 'Other'";
     assert_error(&format!("{source}{actions}"), "unknown group");
@@ -207,7 +243,7 @@ call = "base"
     );
     let derived_only = actions.replace("group = \"ops\"\n", "");
     let catalog = Catalog::parse(&format!("{source}{derived_only}{groups}")).unwrap();
-    let views = catalog.actions();
+    let views = catalog.web_actions();
     assert!(views[0].group.is_none());
     assert_eq!(views[1].group.as_ref().unwrap().id, "other");
 }
@@ -353,6 +389,12 @@ fn rejects_invalid_tokens_and_redacts_toml_diagnostics() {
         "admin_token = { value = \"test-admin\" }",
     );
     assert_error(&source, "invalid TOML or configuration fields");
+}
+
+#[test]
+fn rejects_legacy_webhook_with_migration_instructions() {
+    let source = EXAMPLE.replace("expose.webhook =", "webhook =");
+    assert_error(&source, "move webhook.token to expose.webhook.token");
 }
 
 #[test]

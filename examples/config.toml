@@ -37,17 +37,19 @@ exec = { program = "/usr/local/lib/runlever/compose.sh", args = [{ param = "proj
 label = "重启 Compose 项目"
 call = "compose"
 bind = { operation = "restart" }
+expose.web = true
 
 [actions.restart-forgejo]
 label = "重启 Forgejo"
 call = "compose-restart"
 bind = { project = "forgejo" }
 # The service installer replaces this placeholder. Use a separate secret when installing manually.
-webhook = { token = "RUNLEVER_GENERATED_FORGEJO_TOKEN" }
+expose.webhook = { token = "RUNLEVER_GENERATED_FORGEJO_TOKEN" }
 
 [actions.compose-update]
 label = "拉取并重建"
 group = "compose"
+expose.web = true
 inputs = { project = { enum = "projects", label = "项目" } }
 lock = { param = "project" }
 exec = { cwd = { param = "project" }, command = "docker compose pull && docker compose up -d --force-recreate" }

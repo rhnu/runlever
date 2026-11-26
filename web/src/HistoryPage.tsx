@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, isUnauthorized } from "./api";
-import { formatDuration, matchesFilters, selectionLabel, sources, statuses } from "./model";
+import { formatDuration, matchesFilters, sources, statuses } from "./model";
 import type { Action, Filters, Run } from "./model";
 import { historyHref, Link, navigate } from "./route";
 import { RunDrawer } from "./RunDrawer";
@@ -36,7 +36,7 @@ function HistoryResults({ actions, filters, run, onUnauthorized }: HistoryPagePr
         if (controller.signal.aborted) return;
         setSeenActions((previous) => ({
           ...previous,
-          ...Object.fromEntries(page.map(({ action }) => [action, action])),
+          ...Object.fromEntries(page.map(({ action, label }) => [action, label])),
         }));
         setRecords((previous) =>
           before === undefined
@@ -79,7 +79,6 @@ function HistoryResults({ actions, filters, run, onUnauthorized }: HistoryPagePr
   }
 
   const actionOptions = new Map(Object.entries(seenActions));
-  const actionById = new Map(actions.map((item) => [item.id, item]));
   if (action) actionOptions.set(action, actionOptions.get(action) ?? action);
   for (const item of actions) actionOptions.set(item.id, item.label);
   const hasFilters = Boolean(action || status || source);
@@ -156,10 +155,8 @@ function HistoryResults({ actions, filters, run, onUnauthorized }: HistoryPagePr
             </div>
             <ul>
               {records.map((item) => {
-                const action = actionById.get(item.action);
-                const target = actionById.get(item.target);
-                const choices = Object.entries(item.selections)
-                  .map(([key, value]) => selectionLabel(action, key, value, target).value)
+                const choices = Object.values(item.selection_labels)
+                  .map(({ value }) => value)
                   .join(" / ");
                 const duration =
                   item.started_at !== null && item.finished_at !== null
@@ -222,7 +219,6 @@ function HistoryResults({ actions, filters, run, onUnauthorized }: HistoryPagePr
         <RunDrawer
           key={run}
           id={run}
-          actions={actions}
           onUnauthorized={onUnauthorized}
           onRun={updateRun}
           closeHref={historyHref(undefined, filters)}

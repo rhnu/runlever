@@ -34,9 +34,28 @@ pub struct Catalog {
 struct Action {
     label: String,
     group: Option<String>,
-    webhook_token: Option<String>,
+    expose: Exposure,
     execution: Arc<Execution>,
     bindings: BTreeMap<String, String>,
+}
+
+#[derive(Clone, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct Exposure {
+    web: bool,
+    webhook: Option<Webhook>,
+}
+
+impl Exposure {
+    fn webhook_token(&self) -> Option<&str> {
+        self.webhook.as_ref().map(|webhook| webhook.token.as_str())
+    }
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Webhook {
+    token: String,
 }
 
 #[derive(Deserialize)]
@@ -133,6 +152,12 @@ pub struct OptionView {
     pub label: String,
 }
 
+#[derive(Serialize)]
+pub struct SelectionLabel<'a> {
+    pub label: &'a str,
+    pub value: &'a str,
+}
+
 #[derive(Debug)]
 pub struct Invocation {
     pub action: String,
@@ -192,12 +217,13 @@ impl Catalog {
 
     /// Credentials known to the service that must be masked in captured process output.
     pub fn secrets(&self) -> Vec<String> {
-        std::iter::once(self.admin_token.clone())
+        std::iter::once(self.admin_token())
             .chain(
                 self.actions
                     .values()
-                    .filter_map(|action| action.webhook_token.clone()),
+                    .filter_map(|action| action.expose.webhook_token()),
             )
+            .map(str::to_owned)
             .collect()
     }
 
@@ -215,7 +241,7 @@ impl Catalog {
         );
         for (id, action) in &self.actions {
             ensure!(
-                !action.webhook_token.as_deref().is_some_and(is_placeholder),
+                !action.expose.webhook_token().is_some_and(is_placeholder),
                 "replace the example webhook token for action {id:?} before serving"
             );
         }
@@ -242,10 +268,15 @@ impl Catalog {
         self.queue
     }
 
-    /// Return only the Action and option labels, IDs, and permitted selections.
-    pub fn actions(&self) -> Vec<ActionView> {
+    pub fn action_count(&self) -> usize {
+        self.actions.len()
+    }
+
+    /// List Actions with a web execution entry point and their permitted selections.
+    pub fn web_actions(&self) -> Vec<ActionView> {
         self.actions
             .iter()
+            .filter(|(_, action)| action.expose.web)
             .map(|(id, action)| ActionView {
                 id: id.clone(),
                 label: action.label.clone(),
@@ -272,11 +303,45 @@ impl Catalog {
     }
 
     pub fn webhook_token(&self, id: &str) -> Option<&str> {
-        self.actions.get(id)?.webhook_token.as_deref()
+        self.actions.get(id)?.expose.webhook_token()
     }
 
-    pub fn has_action(&self, id: &str) -> bool {
-        self.actions.contains_key(id)
+    pub fn has_web_action(&self, id: &str) -> bool {
+        self.actions.get(id).is_some_and(|action| action.expose.web)
+    }
+
+    pub fn action_label(&self, id: &str) -> Option<&str> {
+        self.actions.get(id).map(|action| action.label.as_str())
+    }
+
+    /// Look up display labels for a run's recorded selections in the current configuration.
+    pub fn selection_labels<'a>(
+        &'a self,
+        action: &str,
+        target: &str,
+        selections: &'a BTreeMap<String, String>,
+    ) -> BTreeMap<&'a str, SelectionLabel<'a>> {
+        let action = self.actions.get(action);
+        let target = self.actions.get(target);
+        selections
+            .iter()
+            .map(|(name, value)| {
+                let input = action
+                    .filter(|action| !action.bindings.contains_key(name))
+                    .and_then(|action| action.execution.inputs.get(name))
+                    .or_else(|| target.and_then(|target| target.execution.inputs.get(name)));
+                let selection = match input {
+                    Some(input) => SelectionLabel {
+                        label: &input.label,
+                        value: self.enums[&input.enum_id]
+                            .get(value)
+                            .map_or(value.as_str(), |option| option.label.as_str()),
+                    },
+                    None => SelectionLabel { label: name, value },
+                };
+                (name.as_str(), selection)
+            })
+            .collect()
     }
 
     /// Validate public option IDs, then substitute the configured values into argv and cwd.

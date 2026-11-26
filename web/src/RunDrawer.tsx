@@ -1,6 +1,6 @@
 import { useId, useLayoutEffect, useRef, useState } from "react";
-import { dateTimeAttribute, formatDuration, formatTime, selectionLabel, sources } from "./model";
-import type { Action, Run } from "./model";
+import { dateTimeAttribute, formatDuration, formatTime, sources } from "./model";
+import type { Run } from "./model";
 import { closeRun, historyHref, Link } from "./route";
 import { Feedback, Icon, RunTime, StatusBadge } from "./ui";
 import { useRunStream } from "./use-run-stream";
@@ -9,7 +9,6 @@ const linesPerPage = 400;
 
 interface RunDrawerProps {
   id: number;
-  actions: Action[];
   onUnauthorized: () => void;
   onRun?: (run: Run) => void;
   closeHref: string;
@@ -19,7 +18,6 @@ interface RunDrawerProps {
 
 export function RunDrawer({
   id,
-  actions,
   onUnauthorized,
   onRun,
   closeHref,
@@ -103,7 +101,7 @@ export function RunDrawer({
             {stream.error}
           </p>
         ) : run ? (
-          <RunDetails run={run} actions={actions} stream={stream} />
+          <RunDetails run={run} stream={stream} />
         ) : stream.error ? (
           <Feedback retry={stream.retry}>{stream.error}</Feedback>
         ) : (
@@ -116,7 +114,7 @@ export function RunDrawer({
 
 type RunStream = Omit<ReturnType<typeof useRunStream>, "run">;
 
-function RunDetails({ run, actions, stream }: { run: Run; actions: Action[]; stream: RunStream }) {
+function RunDetails({ run, stream }: { run: Run; stream: RunStream }) {
   const { buffer, error, revision, retry } = stream;
   const logHeading = useId();
   const [follow, setFollow] = useState(true);
@@ -164,25 +162,19 @@ function RunDetails({ run, actions, stream }: { run: Run; actions: Action[]; str
     if (viewport.current) viewport.current.scrollTop = 0;
   }
 
-  const action = actions.find((item) => item.id === run.action);
-  const target = actions.find((item) => item.id === run.target);
-
   return (
     <>
       <dl className="run-meta">
-        {Object.entries(run.selections).map(([key, value]) => {
-          const selection = selectionLabel(action, key, value, target);
-          return (
-            <div key={key}>
-              <dt>{selection.label}</dt>
-              <dd>{selection.value}</dd>
-            </div>
-          );
-        })}
+        {Object.entries(run.selection_labels).map(([key, { label, value }]) => (
+          <div key={key}>
+            <dt>{label}</dt>
+            <dd>{value}</dd>
+          </div>
+        ))}
         {run.target && run.target !== run.action && (
           <div>
             <dt>目标</dt>
-            <dd>{target?.label ?? run.target}</dd>
+            <dd>{run.target_label ?? run.target}</dd>
           </div>
         )}
         <div>

@@ -31,7 +31,9 @@ export interface Run {
   action: string;
   label: string;
   target: string;
+  target_label?: string;
   selections: Selections;
+  selection_labels: Record<string, { label: string; value: string }>;
   source: Source;
   status: Status;
   submitted_at: number;
@@ -69,21 +71,6 @@ const time = new Intl.DateTimeFormat("zh-CN", {
 export const formatTime = (seconds: number) => time.format(seconds * 1000);
 export const formatDateTime = (seconds: number) => dateTime.format(seconds * 1000);
 export const dateTimeAttribute = (seconds: number) => new Date(seconds * 1000).toISOString();
-
-export function selectionLabel(
-  action: Action | undefined,
-  key: string,
-  value: string,
-  target?: Action,
-) {
-  const input =
-    action?.inputs.find((field) => field.id === key) ??
-    target?.inputs.find((field) => field.id === key);
-  return {
-    label: input?.label ?? key,
-    value: input?.options.find((option) => option.id === value)?.label ?? value,
-  };
-}
 
 export function formatDuration(startedAt: number, finishedAt: number) {
   const seconds = Math.max(0, finishedAt - startedAt);
