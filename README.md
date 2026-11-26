@@ -7,8 +7,8 @@ Runlever 在一台 Linux 主机上运行管理员预先定义的 Action。通过
 从 GitHub Releases 下载与 `uname -m` 相符的发行包。以 x86_64、部署地址 `https://ops.example.com` 为例，在 VPS 上运行以下命令。ARM64 使用文件名中的 `aarch64`。
 
 ```sh
-tar -xzf runlever-0.4.0-linux-x86_64.tar.gz
-cd runlever-0.4.0-linux-x86_64
+tar -xzf runlever-0.5.0-linux-x86_64.tar.gz
+cd runlever-0.5.0-linux-x86_64
 sudo ./runlever service install --origin https://ops.example.com
 ```
 
@@ -26,7 +26,7 @@ ops.example.com {
 
 升级时解压新版本并再次运行 `sudo ./runlever service install`。安装器更新二进制和 [systemd unit](packaging/runlever.service)，保留现有配置、脚本和数据库，随后重启服务。请在执行和排队的动作均已结束后升级。0.2.0 启动时会迁移数据库，保留已有执行记录和日志。
 
-如果旧配置使用 Action 顶层的 `webhook`，请在升级前把它移到 `expose.webhook`。给所有需要继续在网页运行的 Action 添加 `expose.web = true`。使用新版本的 `sudo ./runlever check --config /etc/runlever/config.toml` 检查迁移后的配置，再运行安装命令。
+从 0.4.0 或更早版本升级时，把 Action 顶层的 `webhook` 移到 `expose.webhook`，并给所有需要继续在网页运行的 Action 添加 `expose.web = true`。使用新版本的 `sudo ./runlever check --config /etc/runlever/config.toml` 检查迁移后的配置，再运行安装命令。
 
 ## 定义动作
 
