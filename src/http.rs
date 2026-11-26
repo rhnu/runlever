@@ -97,6 +97,12 @@ pub fn router(catalog: Arc<Catalog>, engine: Engine) -> Router {
         .route("/api/login", post(login))
         .route("/hooks/{id}", post(hook))
         .route("/", get(index))
+        .route("/favicon.ico", get(|| async { embedded("favicon.ico") }))
+        .route(
+            "/manifest.webmanifest",
+            get(|| async { embedded("manifest.webmanifest") }),
+        )
+        .route("/icons/{file}", get(icon))
         .route("/assets/{*file}", get(asset))
         .layer(DefaultBodyLimit::max(64 * 1024))
         .layer(middleware::from_fn(response_headers))
@@ -327,6 +333,11 @@ async fn events(
 async fn index() -> Reply {
     embedded("index.html")
 }
+
+async fn icon(Path(file): Path<String>) -> Reply {
+    embedded(&format!("icons/{file}"))
+}
+
 async fn asset(Path(file): Path<String>) -> Reply {
     embedded(&format!("assets/{file}"))
 }
@@ -340,6 +351,8 @@ fn embedded(file: &str) -> Reply {
         Some("svg") => "image/svg+xml",
         Some("woff2") => "font/woff2",
         Some("png") => "image/png",
+        Some("ico") => "image/vnd.microsoft.icon",
+        Some("webmanifest") => "application/manifest+json",
         _ => "application/octet-stream",
     };
     let cache = if file.starts_with("assets/") {
